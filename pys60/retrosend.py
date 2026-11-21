@@ -100,7 +100,7 @@ import struct
 #@INLINE media.py
 from media import read_id3, video_info, human_duration
 
-VERSION = u"1.1.0"  # single source of truth: build_sis.sh reads this
+VERSION = u"1.1.1"  # single source of truth: build_sis.sh reads this
 API = "/api/localsend/v2/"
 MULTICAST = "224.0.0.167"
 DEFAULT_PORT = 53317

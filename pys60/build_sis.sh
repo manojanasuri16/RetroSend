@@ -44,13 +44,22 @@ assert text.find("#@INLINE") < 0
 open("build/default.py", "w").write(text)
 PY
 python3 tools/check_py22.py build/default.py
-cp build/default.py dist/retrosend.py
+cp build/default.py dist/retrosend.py   # single-file version for the Script Shell
+
+# The installed app is split into modules: the phone compiles each one
+# separately (less memory at start-up than one 130 KB file), and the tiny
+# starter shows any loading error on screen. Files go to \private\<uid>\.
+rm -rf build/app && mkdir -p build/app
+cp launcher.py build/app/default.py
+cp retrosend.py build/app/rs_app.py
+cp media.py grid.py webshare.py build/app/
+for f in build/app/*.py; do python3 tools/check_py22.py "$f" >/dev/null; done
 
 $PY $ENS py2sis --uid=0xE7A3D5C1 --appname=RetroSend --version=$VERSION \
   --caption=RetroSend --shortcaption=RetroSend --vendor=RetroSend --icon=icon.svg \
   --caps=NetworkServices+LocalServices+ReadUserData+WriteUserData+UserEnvironment \
-  --heapsize=4k,4M --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
-  build/default.py dist/RetroSend.sis </dev/null >build/py2sis.log
+  --heapsize=4k,16M --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
+  build/app dist/RetroSend.sis </dev/null >build/py2sis.log
 echo "built dist/RetroSend.sis"
 
 if [ -f "$RUNTIME" ]; then

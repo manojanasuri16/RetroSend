@@ -27,7 +27,7 @@ recv = retrosend.entry_labels(app.recv_entries())
 check("send tab has contacts, folder, browser items",
       u"Send contacts" in send and u"Send any file or folder" in send and u"Share files to a browser" in send)
 check("receive tab shows version", (u"About RetroSend " + retrosend.VERSION) in recv)
-check("version is 1.1.0", retrosend.VERSION == u"1.1.0")
+check("version looks like x.y.z", len(retrosend.VERSION.split(u".")) == 3)
 check("every entry has a callable action",
       len([1 for l, a in app.send_entries() + app.recv_entries() if not callable(a)]) == 0)
 

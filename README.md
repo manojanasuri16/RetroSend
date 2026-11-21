@@ -169,6 +169,7 @@ The native app targets **Python for S60 1.4.5** (Python 2.2.2, 2008), so the cod
 ```
 pys60/                  native S60 app (Python for S60 1.4.5)
   retrosend.py          the app: protocol, async networking, UI, picker; VERSION is defined here
+  launcher.py           tiny starter (installed as default.py): shows any start-up error on screen
   media.py              ID3 tags/album art and MP4 duration    } pasted into the app
   grid.py               photo grid screen                      } at build time
   webshare.py           browser sharing (web page, download/upload) }
