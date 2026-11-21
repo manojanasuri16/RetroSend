@@ -31,7 +31,7 @@ open(root + "Album" + os.sep + "d.png", "wb").write("y")
 retrosend_sep = os.sep
 got = []
 app = FakeApp()
-pk = retrosend.Picker(app, root, lambda paths: got.extend(paths))
+pk = retrosend.Picker(app, root, lambda paths, names=None: got.extend(paths))
 # Picker uses "\\" as folder separator on the phone; use os.sep on the PC
 src = open(retrosend.__file__.replace(".pyc", ".py")).read()
 pk.show()

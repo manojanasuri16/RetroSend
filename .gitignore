@@ -12,3 +12,4 @@ pys60/cert/
 *.pyc
 retrosend_log*.txt
 E:*
+retrosend.cfg

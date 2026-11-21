@@ -20,6 +20,7 @@ threading.Thread(target=httpd.serve_forever).setDaemon(True) or None
 t = threading.Thread(target=httpd.serve_forever); t.setDaemon(True); t.start()
 
 retrosend.valid_ip = lambda ip: 1
+import tempfile; os.chdir(tempfile.mkdtemp())  # keep retrosend.cfg out of the repo
 net = pcnet.SelectNet()
 lt = threading.Thread(target=net.run); lt.setDaemon(True); lt.start()
 app = retrosend.App()

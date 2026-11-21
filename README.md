@@ -29,11 +29,19 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 
 - **Send** photos, videos, music, any file, or a text message to a LocalSend device.
 - **Multi-select:** mark several files, even in different folders, and send them in one transfer.
+- **Send a whole folder:** the folder structure is kept on the other device (`Album/song.mp3`).
+- **Photo grid:** "Send a photo" opens a thumbnail grid (switch to the list view in Options).
+- **Send contacts:** pick contacts and send them as a `.vcf` file.
+- **Browser sharing:** turn it on, and any phone or PC on the Wi-Fi can open `http://<phone-ip>:53317/` in a normal browser to download the files you shared or upload files and text to the phone. No app needed on the other side.
 - **Previews in the file picker:**
   - photos: the camera's built-in thumbnail (fast, even for 5 MP photos)
   - music: album art plus title, artist and album from the MP3's ID3 tags
   - videos: length and size, read from the MP4/3GP header
-- **Receive** one or many files from LocalSend, with an Accept/Decline prompt (or auto-accept). Files are saved to `E:\RetroSend\`.
+- **Receive** one or many files from LocalSend, with an Accept/Decline prompt (or auto-accept). Photos, music and videos are saved to `E:\Images`, `E:\Music` and `E:\Videos`, so Gallery and the Music player find them. Everything else goes to `E:\RetroSend\` (the sorting can be switched off).
+- **Open received files** in the phone's own viewer or player, straight from RetroSend.
+- **Cancel sending / Stop receiving** from the Options menu, at any time during a transfer.
+- **Speed and time left** in the title bar while sending or receiving (e.g. `45% 120 KB/s 0:32 left`).
+- **Remembers devices:** devices you've used are listed right away after a restart, and their addresses are re-checked automatically.
 - **Receive text messages**, shown on screen.
 - **Finds devices automatically:** LocalSend multicast announcements plus a sweep of the local network (needed on S60, see [How it works](#how-it-works)). You can also add a device by IP.
 - **Send | Receive tabs**, native S60 look, works with the keypad.
@@ -69,10 +77,12 @@ Open **LocalSend → Settings** and turn **Encryption off**. If "Require PIN" is
 RetroSend asks **once** which Wi-Fi network to use and remembers it. To change it later, go to *Options → Change Wi-Fi*.
 
 ### Send tab
-- **Send a photo / video / music** opens the picker in `E:\Images`, `E:\Videos` or `E:\Music` (or a similar folder).
-- **Send any file** lets you pick a drive and browse anywhere.
+- **Send a photo** opens a thumbnail grid of `E:\Images`. **Send a video / music** opens the list picker in `E:\Videos` or `E:\Music`.
+- **Send any file or folder** lets you pick a drive and browse anywhere. Use *Options → Mark whole folder* to send a folder.
+- **Send contacts**: tick contacts, then pick a device. They're sent as a `.vcf` file.
 - **Send text message**
-- **Devices** shows the devices found so far, a scan, or *Add by IP*.
+- **Share files to a browser**: pick files that browsers may download (see Browser sharing below).
+- **Devices** shows known and found devices, a scan, *Add by IP*, and *Forget this device*.
 
 **Picker keys:**
 
@@ -82,18 +92,36 @@ RetroSend asks **once** which Wi-Fi network to use and remembers it. To change i
 | Centre (or 5, or Right) | Open a folder, or mark/unmark a file |
 | Left | Go up a folder |
 | Options → **Send marked (N)** | Choose a device and send |
+| Options → Open file | Opens it in the phone's viewer or player |
+| Options → Mark whole folder | Marks every file in the selected folder |
 | Options → Mark all files here / Unmark all | |
+| Options → Grid view / List view | Switch between the photo grid and the list |
 | Right softkey | Back / cancel |
 
 After *Send marked*, pick the device. If your device isn't listed, choose **Scan again** (this can take up to a minute) or **Enter IP address...** and type the IP shown in LocalSend.
 
 ### Receive tab
-- Shows **Ready to receive**, your name, your IP (`192.168.x.x:53317`) and the save folder.
-- **Open received files**: a picker over `E:\RetroSend\`, so you can pass files on to another device.
+- Shows **Ready to receive**, your name (select it to rename), and your IP (`192.168.x.x:53317`).
+- **Received files**: the last 30 received files. Open one, send it on, or show it in its folder.
+- **Browse received folder**: the picker over `E:\RetroSend\`. The centre key opens a file.
 - **Auto-accept: ON/OFF**
+- **Sort into Images/Music/Videos: ON/OFF**
+- **Browser sharing: ON/OFF**: shows the address to open in a browser when it's on.
 - **Log**: what happened, useful for troubleshooting.
+- **About**: the version number.
+
+### Browser sharing
+Turn on **Browser sharing** on the Receive tab (or use *Send → Share files to a browser*). On any phone, tablet or PC on the same Wi-Fi, open `http://<phone-ip>:53317/` in a browser to:
+- download the files you chose to share
+- upload one or more files to the phone
+- send a text message to the phone
+
+Anyone on the same Wi-Fi can open that page while it's on, so turn it off when you're done.
 
 When someone sends you files, RetroSend lists them and asks you to **Accept**. Progress shows in the title bar.
+
+### Cancelling
+While a transfer runs, the first Options item is **Cancel sending** (the other device is told) or **Stop receiving** (the half-received file is deleted).
 
 ### Closing
 Use **Options → Exit**. On S60 the red key only hides an app. If RetroSend says *"already running in the background"*, hold the **Menu** key, select the other RetroSend and press **C**.
@@ -140,8 +168,10 @@ The native app targets **Python for S60 1.4.5** (Python 2.2.2, 2008), so the cod
 
 ```
 pys60/                  native S60 app (Python for S60 1.4.5)
-  retrosend.py          the app: protocol, async networking, UI, picker
-  media.py              ID3 tags/album art and MP4 duration (pasted into the app at build time)
+  retrosend.py          the app: protocol, async networking, UI, picker; VERSION is defined here
+  media.py              ID3 tags/album art and MP4 duration    } pasted into the app
+  grid.py               photo grid screen                      } at build time
+  webshare.py           browser sharing (web page, download/upload) }
   build_sis.sh          builds RetroSend.sis and RetroSend_with_Python.sis
   icon.svg
   tests/                PC tests with stand-ins for the S60 modules (appuifw, e32, ...)

@@ -9,7 +9,10 @@ cd "$(dirname "$0")"
 PY=../tools/mamba/py27/bin/python2
 ENS=../tools/ensymble/src/ensymble.py
 RUNTIME=../phone-installs/PythonForS60_1_4_5_3rdEd.sis
-VERSION=1.0.0
+# the version lives in retrosend.py (VERSION = u"x.y.z"); bump it for every release
+VERSION=$(sed -n 's/^VERSION = u"\([0-9.]*\)".*/\1/p' retrosend.py)
+[ -n "$VERSION" ] || { echo "VERSION not found in retrosend.py"; exit 1; }
+echo "building RetroSend $VERSION"
 mkdir -p build dist cert
 
 # Self-signed certificate, valid 2008-2037 so it also installs when the phone's
@@ -22,13 +25,23 @@ if [ ! -f cert/retrosend_key.pem ]; then
   openssl rsa -in cert/retrosend_key.pem -traditional -out cert/retrosend_key.pem
 fi
 
-# One file for the phone: paste media.py in place of its import.
+# One file for the phone: paste media.py, grid.py and webshare.py in place
+# of their "#@INLINE name.py" marker and the import line after it.
 python3 - <<'PY'
-src = open("retrosend.py").read()
-media = open("media.py").read()
-marker = "#@INLINE media.py\nfrom media import read_id3, video_info, human_duration\n"
-assert marker in src
-open("build/default.py", "w").write(src.replace(marker, media + "\n"))
+lines = open("retrosend.py").read().split("\n")
+out = []
+i = 0
+while i < len(lines):
+    if lines[i].startswith("#@INLINE "):
+        name = lines[i].split(" ", 1)[1].strip()
+        out.append(open(name).read())
+        i = i + 2  # skip the marker and the PC import line
+        continue
+    out.append(lines[i])
+    i = i + 1
+text = "\n".join(out)
+assert text.find("#@INLINE") < 0
+open("build/default.py", "w").write(text)
 PY
 python3 tools/check_py22.py build/default.py
 cp build/default.py dist/retrosend.py

@@ -100,7 +100,7 @@ import struct
 #@INLINE media.py
 from media import read_id3, video_info, human_duration
 
-VERSION = u"1.0"
+VERSION = u"1.1.0"  # single source of truth: build_sis.sh reads this
 API = "/api/localsend/v2/"
 MULTICAST = "224.0.0.167"
 DEFAULT_PORT = 53317
@@ -472,11 +472,29 @@ class Refused(Exception):
 
 
 
-def make_file_item(path):
+def make_file_item(path, name=None):
     path = to_b(path)
-    name = os.path.basename(path.replace("\\", "/"))
+    if name is None:
+        name = to_u(os.path.basename(path.replace("\\", "/")))
     return {"path": path, "name": to_u(name), "size": long(os.path.getsize(path)),
             "type": mime_type(name), "text": None}
+
+
+def save_dir_for(cfg, name):
+    """Folder for a received file: photos/music/videos go where the phone's
+    Gallery and Music player look (if "sort" is on), the rest to savedir."""
+    if cfg.get("sort"):
+        e = to_b(name).lower()
+        e = e[e.rfind(".") + 1:]
+        kinds = [(["jpg", "jpeg", "png", "gif", "bmp"], ["E:\\Images\\", "C:\\Data\\Images\\"]),
+                 (["mp3", "m4a", "aac", "wma", "wav", "amr"], ["E:\\Music\\", "E:\\Sounds\\", "C:\\Data\\Sounds\\"]),
+                 (["mp4", "3gp", "m4v", "3g2"], ["E:\\Videos\\", "C:\\Data\\Videos\\"])]
+        for exts, dirs in kinds:
+            if exts.count(e):
+                for d in dirs:
+                    if os.path.isdir(d):
+                        return d
+    return cfg["savedir"]
 
 
 def make_text_item(text):
@@ -811,6 +829,11 @@ class ServerConn:
                 return
             self.method = parts[0]
             target = parts[1]
+            web = getattr(self.srv, "web", None)
+            if web is not None and target[:len("/api/")] != "/api/":
+                self.state = "handed"  # browser sharing owns this connection now
+                web.handle(self.conn, self.ip, self.method, target, headers, data)
+                return
             self.query = {}
             q = target.find("?")
             if q >= 0:
@@ -1055,14 +1078,17 @@ class Server:
             return
         s["done"][u["fid"]] = 1
         self.ev.log(u"Saved " + to_u(u["path"]))
+        f = getattr(self.ev, "saved", None)
+        if f is not None:
+            f(u["path"])
         sc.respond(200)
         if len(s["done"]) == len(s["tokens"]) and self.session is s:
             self.session = None
-            self.ev.finished(u"Received %d file(s) from %s.\nSaved in %s" %
-                             (len(s["done"]), s["from"], to_u(self.cfg["savedir"])))
+            self.ev.finished(u"Received %d file(s) from %s.\nOpen them from Receive > "
+                             u"Received files." % (len(s["done"]), s["from"]))
 
     def create_path(self, name):
-        d = self.cfg["savedir"]
+        d = save_dir_for(self.cfg, name)
         if not os.path.exists(d):
             os.makedirs(d)
         i = name.rfind(u".")
@@ -1503,13 +1529,16 @@ def temp_dir():
 
 
 class Picker:
-    def __init__(self, app, start, on_done, view_only=0):
+    def __init__(self, app, start, on_done, view_only=0, marked=None, root=None):
         self.app = app
         self.path = start
-        self.root = start
+        self.root = root or start
         self.on_done = on_done
         self.view_only = view_only
-        self.marked = {}        # path -> 1
+        if marked is None:
+            marked = {}
+        self.marked = marked    # path -> 1 (shared with the photo grid)
+        self.names = {}         # path -> name to send, e.g. u"Album/song.mp3"
         self.entries = []       # (label, name, is_dir)
         self.cur = 0
         self.top = 0
@@ -1549,18 +1578,18 @@ class Picker:
 
     def update_menu(self):
         n = len(self.marked)
+        menu = [(u"Send marked (%d)" % n, self.finish)]
         if self.view_only:
-            menu = [(u"Send marked (%d)" % n, self.finish),
-                    (u"Mark / unmark", self.toggle_current),
-                    (u"Mark all files here", self.mark_all),
-                    (u"Unmark all", self.unmark_all),
-                    (u"Close", self.cancel)]
+            menu.append((u"Open file", self.open_current))
+            menu.append((u"Mark / unmark", self.toggle_current))
         else:
-            menu = [(u"Send marked (%d)" % n, self.finish),
-                    (u"Mark / unmark", self.toggle_current),
-                    (u"Mark all files here", self.mark_all),
-                    (u"Unmark all", self.unmark_all),
-                    (u"Cancel", self.cancel)]
+            menu.append((u"Mark / unmark", self.toggle_current))
+            menu.append((u"Open file", self.open_current))
+        menu.append((u"Mark whole folder", self.mark_folder))
+        menu.append((u"Mark all files here", self.mark_all))
+        menu.append((u"Unmark all", self.unmark_all))
+        menu.append((u"Grid view (photos)", self.to_grid))
+        menu.append((u"Close", self.cancel))
         appuifw.app.menu = menu
         title = u"%d marked" % n
         if n == 0:
@@ -1591,8 +1620,53 @@ class Picker:
                 return
             paths = [cur]
         paths.sort()
+        names = self.names
         self.close()
-        self.on_done(paths)
+        self.on_done(paths, names)
+
+    def open_current(self):
+        p = self.current_file()
+        if p is None:
+            appuifw.note(u"Select a file first.", "info")
+            return
+        self.app.open_file(p)
+
+    def to_grid(self):
+        marked = self.marked
+        path = self.path
+        self.close()
+        self.app.switch_to_grid(path, marked, self.root)
+
+    def mark_folder(self):
+        """Marks every file in the selected folder (and its subfolders)."""
+        e = self.current()
+        if e is None or not e[2] or e[1] is None:
+            appuifw.note(u"Select a folder first (not ..).", "info")
+            return
+        top = self.path + e[1] + "\\"
+        stack = [(top, to_u(e[1]) + u"/")]
+        count = 0
+        while stack and count < 500:
+            d, prefix = stack[0]
+            del stack[0]
+            try:
+                names = os.listdir(d)
+            except:
+                continue
+            names.sort()
+            for n in names:
+                if n[:1] == "_" or n[:1] == ".":
+                    continue
+                full = d + n
+                if os.path.isdir(full):
+                    stack.append((full + "\\", prefix + to_u(n) + u"/"))
+                elif count < 500:
+                    self.marked[full] = 1
+                    self.names[full] = prefix + to_u(n)
+                    count = count + 1
+        appuifw.note(u"Marked %d file(s) in %s" % (count, to_u(e[1])), "info")
+        self.update_menu()
+        self.redraw(None)
 
     # ---- folder contents
 
@@ -1656,7 +1730,10 @@ class Picker:
                 self.path = self.path + e[1] + "\\"
                 self.load_dir()
             return
-        self.toggle_current()
+        if self.view_only:
+            self.open_current()
+        else:
+            self.toggle_current()
 
     def toggle_current(self):
         p = self.current_file()
@@ -1677,7 +1754,8 @@ class Picker:
         self.redraw(None)
 
     def unmark_all(self):
-        self.marked = {}
+        self.marked.clear()
+        self.names.clear()
         self.update_menu()
         self.redraw(None)
 
@@ -1898,6 +1976,19 @@ class Picker:
             c.text((8, ph + 20), u"(empty folder)", fill=0x7A8CA5, font="dense")
 
 
+def on_off(flag):
+    if flag:
+        return u"ON"
+    return u"OFF"
+
+
+def entry_labels(entries):
+    out = []
+    for label, action in entries:
+        out.append(label)
+    return out
+
+
 def clip(s, n):
     s = to_u(s)
     n = int(n)
@@ -1906,6 +1997,14 @@ def clip(s, n):
     if len(s) > n:
         return s[:n - 1] + u"~"
     return s
+
+
+# grid.py (photo grid) and webshare.py (browser sharing) are pasted here by
+# build_sis.sh; on the PC they are imported and given this module's helpers.
+#@INLINE grid.py
+import grid as _gr; _gr.__dict__.update(globals()); PhotoGrid = _gr.PhotoGrid
+#@INLINE webshare.py
+import webshare as _ws; _ws.__dict__.update(globals()); WebShare = _ws.WebShare
 
 
 # ---------------------------------------------------------------- phone app
@@ -1995,12 +2094,37 @@ class App:
         if os.path.isdir("E:\\"):
             default_dir = "E:\\RetroSend\\"
         out["savedir"] = to_b(cfg.get(u"savedir", to_u(default_dir)))
+        out["sort"] = int(cfg.get(u"sort", 1))
+        out["web"] = int(cfg.get(u"web", 0))
+        out["recent"] = []
+        for r in cfg.get(u"recent", []):
+            out["recent"].append(to_b(r))
+        out["devices"] = []
+        for d in cfg.get(u"devices", []):
+            if type(d) is types.DictType and d.get(u"ip"):
+                out["devices"].append({"alias": to_u(d.get(u"alias", u"?")),
+                                       "ip": to_b(d[u"ip"]),
+                                       "port": int(d.get(u"port", DEFAULT_PORT)),
+                                       "fingerprint": to_u(d.get(u"fingerprint", u"")),
+                                       "deviceModel": d.get(u"deviceModel"),
+                                       "protocol": u"http"})
         return out
 
     def save_cfg(self):
         c = self.cfg
         d = {"fingerprint": c["fingerprint"], "alias": c["alias"], "port": c["port"],
-             "auto": c["auto"], "savedir": to_u(c["savedir"])}
+             "auto": c["auto"], "savedir": to_u(c["savedir"]), "sort": c["sort"],
+             "web": c["web"]}
+        rec = []
+        for r in c["recent"][-30:]:
+            rec.append(to_u(r))
+        d["recent"] = rec
+        devs = []
+        for p in c["devices"][:20]:
+            devs.append({"alias": p["alias"], "ip": to_u(p["ip"]), "port": p["port"],
+                         "fingerprint": p["fingerprint"],
+                         "deviceModel": to_u(p.get("deviceModel") or u"")})
+        d["devices"] = devs
         if c["apid"] is not None:
             d["apid"] = c["apid"]
         try:
@@ -2059,9 +2183,47 @@ class App:
             if (dev["fingerprint"] and dev["fingerprint"] == p["fingerprint"]) or \
                (dev["ip"] == p["ip"] and dev["port"] == p["port"]):
                 self.peers[i] = dev
+                self.remember_device(dev)  # e.g. the router gave it a new IP
                 return
         self.peers.append(dev)
         self.log(u"Found " + dev["alias"] + u" " + to_u(dev["ip"]))
+        self.remember_device(dev)
+
+    def remember_device(self, dev):
+        devs = self.cfg["devices"]
+        for i in range(len(devs)):
+            p = devs[i]
+            if (dev["fingerprint"] and dev["fingerprint"] == p["fingerprint"]) or \
+               dev["ip"] == p["ip"]:
+                if p["ip"] == dev["ip"] and p["alias"] == dev["alias"]:
+                    return  # nothing new
+                del devs[i]
+                break
+        devs.insert(0, {"alias": dev["alias"], "ip": dev["ip"], "port": dev["port"],
+                        "fingerprint": dev["fingerprint"],
+                        "deviceModel": dev.get("deviceModel"), "protocol": u"http"})
+        self.save_cfg()
+
+    def forget_device(self, dev):
+        keep = []
+        for p in self.cfg["devices"]:
+            if p["ip"] != dev["ip"]:
+                keep.append(p)
+        self.cfg["devices"] = keep
+        keep = []
+        for p in self.peers:
+            if p["ip"] != dev["ip"]:
+                keep.append(p)
+        self.peers = keep
+        self.save_cfg()
+
+    def saved(self, path):
+        """A received file was written (called by the server)."""
+        rec = self.cfg["recent"]
+        rec.append(to_b(path))
+        if len(rec) > 30:
+            del rec[0]
+        self.save_cfg()
 
     def ask_accept(self, dev, files, total, answer):
         if self.cfg["auto"]:
@@ -2097,12 +2259,22 @@ class App:
                        appuifw.query(u"From " + dev["alias"] + u":", "text", text))
 
     def progress(self, title, done, total):
-        if done == 0:
+        now = time.time()
+        if done == 0 or not getattr(self, "xfer_t0", 0) or done < getattr(self, "xfer_last", 0):
+            self.xfer_t0 = now
             self.update_menu()  # a transfer just started: show Cancel / Stop
-        if total:
-            self.set_title(u"%d%% %s" % (int(done * 100 / total), title))
-        else:
+        self.xfer_last = done
+        if not total:
             self.set_title(title)
+            return
+        pct = int(done * 100 / total)
+        secs = now - self.xfer_t0
+        if done > 0 and secs >= 1:
+            rate = done / secs
+            left = int((total - done) / rate)
+            self.set_title(u"%d%% %s/s %s left" % (pct, human_size(rate), human_duration(left)))
+        else:
+            self.set_title(u"%d%% %s" % (pct, title))
 
     def finished(self, msg):
         self.log(msg)
@@ -2110,6 +2282,48 @@ class App:
         self.net.later(0, self.update_menu)
         self.net.later(0, lambda msg=msg: appuifw.note(msg, "conf"))
         self.refresh()
+
+    def open_file(self, path):
+        """Opens a file in the phone's own viewer or player."""
+        try:
+            if getattr(self, "content", None) is None:
+                self.content = appuifw.Content_handler()
+            try:
+                self.content.open_standalone(to_u(path))
+            except AttributeError:
+                self.content.open(to_u(path))
+        except:
+            appuifw.note(u"Cannot open this file: " + err_text(), "error")
+
+    def show_recent(self):
+        rec = self.cfg["recent"][:]
+        rec.reverse()
+        keep = []
+        for r in rec:
+            if os.path.exists(r):
+                keep.append(r)
+        if not keep:
+            appuifw.note(u"Nothing received yet.", "info")
+            return
+        labels = []
+        for r in keep:
+            try:
+                size = human_size(os.path.getsize(r))
+            except:
+                size = u""
+            labels.append(to_u(os.path.basename(r)) + u"  " + size)
+        i = appuifw.selection_list(labels, 1)
+        if i is None:
+            return
+        path = keep[i]
+        what = appuifw.popup_menu([u"Open", u"Send to a device", u"Show in folder"],
+                                  to_u(os.path.basename(path)))
+        if what == 0:
+            self.open_file(path)
+        elif what == 1:
+            self.choose_target([make_file_item(path)])
+        elif what == 2:
+            self.browse(os.path.dirname(path) + "\\", 1)
 
     def set_title(self, t):
         try:
@@ -2133,6 +2347,10 @@ class App:
             self.server = Server(self.cfg, self, self.net)
             self.server.start()
             self.server_error = None
+            server = self.server
+            self.web = WebShare(self.cfg, self,
+                                lambda name, server=server: server.create_path(safe_name(name)))
+            self.apply_web()
         except:
             self.server = None
             self.server_error = err_text()
@@ -2148,10 +2366,25 @@ class App:
             boot_log("network: udp listening")
         except:
             self.log(u"UDP listen: " + err_text())
+        self.check_saved_devices()
         self.scan()
         boot_log("network: step 4 scan sent")
         self.set_title(u"RetroSend")
         self.refresh()
+
+    def check_saved_devices(self):
+        """Lists remembered devices right away and re-checks their address."""
+        for d in self.cfg["devices"]:
+            known = 0
+            for p in self.peers:
+                if p["ip"] == d["ip"]:
+                    known = 1
+            if not known:
+                self.peers.append(d)
+            c = Client(self.cfg, self, self.net)
+            c.quiet = 1
+            ignore = lambda *a: None
+            c.register(d["ip"], d["port"], self.peer, ignore)
 
     def got_announce(self, data, ip):
         try:
@@ -2230,11 +2463,18 @@ class App:
 
     # ---- UI
 
-    def send_items(self):
-        return [u"Send a photo", u"Send a video", u"Send music", u"Send any file",
-                u"Send text message", u"Devices"]
+    def send_entries(self):
+        return [(u"Send a photo", lambda self=self: self.pick_media("photo")),
+                (u"Send a video", lambda self=self: self.pick_media("video")),
+                (u"Send music", lambda self=self: self.pick_media("music")),
+                (u"Send any file or folder", self.pick_from_drives),
+                (u"Send contacts", self.send_contacts),
+                (u"Send text message", self.send_text),
+                (u"Share files to a browser", self.share_to_browser),
+                (u"Devices", self.show_devices)]
 
-    def recv_items(self):
+    def recv_entries(self):
+        nothing = lambda: None
         if self.server_error:
             status = u"Receiving OFF: " + self.server_error
         elif self.server is None:
@@ -2244,12 +2484,120 @@ class App:
         ip = u"IP: unknown (Options > Change Wi-Fi)"
         if self.ip:
             ip = u"IP: %s:%d" % (to_u(self.ip), self.cfg["port"])
-        auto = u"OFF"
-        if self.cfg["auto"]:
-            auto = u"ON"
-        return [status, u"Name: " + self.cfg["alias"], ip,
-                u"Saving to: " + to_u(self.cfg["savedir"]),
-                u"Open received files", u"Auto-accept: " + auto, u"Log"]
+        web = u"Browser sharing: OFF"
+        if self.cfg["web"]:
+            web = u"Browser sharing: ON"
+            if self.ip:
+                web = u"Browser: http://%s:%d/" % (to_u(self.ip), self.cfg["port"])
+        return [(status, nothing),
+                (u"Name: " + self.cfg["alias"], self.rename),
+                (ip, nothing),
+                (u"Received files", self.show_recent),
+                (u"Browse received folder", lambda self=self: self.browse(self.cfg["savedir"], 1)),
+                (u"Auto-accept: " + on_off(self.cfg["auto"]), self.toggle_auto),
+                (u"Sort into Images/Music/Videos: " + on_off(self.cfg["sort"]), self.toggle_sort),
+                (web, self.toggle_web),
+                (u"Log", self.show_log),
+                (u"About RetroSend " + VERSION, self.help)]
+
+    def send_items(self):
+        return entry_labels(self.send_entries())
+
+    def recv_items(self):
+        return entry_labels(self.recv_entries())
+
+    def toggle_auto(self):
+        self.cfg["auto"] = 1 - self.cfg["auto"]
+        self.save_cfg()
+        self.refresh()
+
+    def toggle_sort(self):
+        self.cfg["sort"] = 1 - self.cfg["sort"]
+        self.save_cfg()
+        if self.cfg["sort"]:
+            appuifw.note(u"Photos, music and videos go to Images, Music and Videos, so "
+                         u"Gallery and the Music player find them.", "info")
+        self.refresh()
+
+    def toggle_web(self):
+        self.cfg["web"] = 1 - self.cfg["web"]
+        self.save_cfg()
+        self.apply_web()
+        if self.cfg["web"]:
+            appuifw.note(u"Open http://%s:%d/ in a browser on the same Wi-Fi to upload "
+                         u"files or download shared ones." % (to_u(self.ip or "phone-ip"),
+                                                              self.cfg["port"]), "info")
+        self.refresh()
+
+    def apply_web(self):
+        if self.server is None:
+            return
+        if self.cfg["web"] and getattr(self, "web", None) is not None:
+            self.server.web = self.web
+        else:
+            self.server.web = None
+
+    def share_to_browser(self):
+        def share(items, self=self):
+            paths = []
+            for it in items:
+                paths.append(it["path"])
+            self.web.set_shared(paths)
+            if not self.cfg["web"]:
+                self.toggle_web()
+            else:
+                appuifw.note(u"Sharing %d file(s) at http://%s:%d/" %
+                             (len(paths), to_u(self.ip or "phone-ip"), self.cfg["port"]),
+                             "info")
+        if getattr(self, "web", None) is None:
+            appuifw.note(u"Receiving is not running.", "error")
+            return
+        self.pick_target = share
+        self.pick_from_drives()
+
+    def send_contacts(self):
+        try:
+            import contacts
+            db = contacts.open()
+        except:
+            appuifw.note(u"Cannot read contacts: " + err_text(), "error")
+            return
+        people = []
+        for cid in db.keys():
+            try:
+                people.append((to_u(db[cid].title), cid))
+            except:
+                pass
+        if not people:
+            appuifw.note(u"No contacts.", "info")
+            return
+        people.sort()
+        labels = []
+        for name, cid in people:
+            labels.append(name or u"(no name)")
+        try:
+            chosen = appuifw.multi_selection_list(labels, style="checkbox", search_field=1)
+        except:
+            chosen = None
+        if not chosen:
+            return
+        ids = []
+        for i in chosen:
+            ids.append(people[i][1])
+        try:
+            data = db.export_vcards(tuple(ids))
+        except:
+            appuifw.note(u"Export failed: " + err_text(), "error")
+            return
+        name = u"contacts.vcf"
+        if len(ids) == 1:
+            name = safe_name(people[chosen[0]][0] or u"contact") + u".vcf"
+        path = temp_dir() + "retrosend_" + to_b(name)
+        f = open(path, "wb")
+        f.write(data)
+        f.close()
+        self.log(u"exported %d contact(s)" % len(ids))
+        self.choose_target([make_file_item(path, name)])
 
     def refresh(self):
         if self.listbox is None:
@@ -2276,27 +2624,11 @@ class App:
         i = self.listbox.current()
         boot_log("selected tab %d item %d" % (self.tab, i))
         if self.tab == 0:
-            if i == 0:
-                self.pick_media("photo")
-            elif i == 1:
-                self.pick_media("video")
-            elif i == 2:
-                self.pick_media("music")
-            elif i == 3:
-                self.pick_from_drives()
-            elif i == 4:
-                self.send_text()
-            elif i == 5:
-                self.show_devices()
+            entries = self.send_entries()
         else:
-            if i == 4:
-                self.browse(self.cfg["savedir"], 1)
-            elif i == 5:
-                self.cfg["auto"] = 1 - self.cfg["auto"]
-                self.save_cfg()
-                self.refresh()
-            elif i == 6:
-                self.show_log()
+            entries = self.recv_entries()
+        if 0 <= i < len(entries):
+            entries[i][1]()
 
     # ---- choosing files
 
@@ -2313,15 +2645,20 @@ class App:
                 found.append(c)
         if not found:
             self.pick_from_drives()
-        elif len(found) == 1:
-            self.browse(found[0])
         else:
-            labels = []
-            for c in found:
-                labels.append(to_u(c))
-            i = appuifw.popup_menu(labels, u"Which folder?")
-            if i is not None:
-                self.browse(found[i])
+            start = found[0]
+            if len(found) > 1:
+                labels = []
+                for c in found:
+                    labels.append(to_u(c))
+                i = appuifw.popup_menu(labels, u"Which folder?")
+                if i is None:
+                    return
+                start = found[i]
+            if kind == "photo":
+                self.switch_to_grid(start, {})
+            else:
+                self.browse(start)
 
     def pick_from_drives(self):
         drives = []
@@ -2341,16 +2678,33 @@ class App:
         if not os.path.isdir(start):
             appuifw.note(u"Nothing here yet: " + to_u(start), "info")
             return
-        def picked(paths, self=self):
-            items = []
-            for p in paths:
-                try:
-                    items.append(make_file_item(p))
-                except:
-                    self.log(u"skip " + to_u(p) + u": " + err_text())
-            if items:
-                self.choose_target(items)
-        self.picker = Picker(self, start, picked, view_only)
+        self.picker = Picker(self, start, self.picked, view_only)
+        self.picker.show()
+
+    def picked(self, paths, names=None):
+        if names is None:
+            names = {}
+        items = []
+        for p in paths:
+            try:
+                items.append(make_file_item(p, names.get(p)))
+            except:
+                self.log(u"skip " + to_u(p) + u": " + err_text())
+        if not items:
+            return
+        target = getattr(self, "pick_target", None)
+        self.pick_target = None
+        if target is not None:
+            target(items)
+        else:
+            self.choose_target(items)
+
+    def switch_to_grid(self, path, marked, root=None):
+        self.picker = PhotoGrid(self, path, self.picked, marked)
+        self.picker.show()
+
+    def switch_to_list(self, path, marked, root=None):
+        self.picker = Picker(self, path, self.picked, 0, marked, root)
         self.picker.show()
 
     def restore_main(self):
@@ -2452,8 +2806,13 @@ class App:
             self.add_by_ip()
         else:
             p = self.peers[i]
-            appuifw.note(u"%s\n%s:%d\n%s" % (p["alias"], to_u(p["ip"]), p["port"],
-                                             to_u(p["deviceModel"] or u"")), "info")
+            what = appuifw.popup_menu([u"Details", u"Forget this device"], p["alias"])
+            if what == 0:
+                appuifw.note(u"%s\n%s:%d\n%s" % (p["alias"], to_u(p["ip"]), p["port"],
+                                                 to_u(p.get("deviceModel") or u"")), "info")
+            elif what == 1:
+                self.forget_device(p)
+                appuifw.note(u"Forgot " + p["alias"], "conf")
 
     def start_send(self, dev, items):
         if self.client is not None:
@@ -2526,7 +2885,7 @@ class App:
         self.refresh()
 
     def help(self):
-        appuifw.note(u"On the other device: open LocalSend, Settings > turn Encryption OFF. "
+        appuifw.note(u"RetroSend " + VERSION + u". On the other device: open LocalSend, Settings > turn Encryption OFF. "
                      u"Same Wi-Fi as this phone. If this phone is not listed there, "
                      u"use Add by IP here with the IP shown in LocalSend.", "info")
 
