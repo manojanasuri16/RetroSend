@@ -43,8 +43,11 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 
 Download from the **[latest release](https://github.com/manojanasuri16/RetroSend/releases/latest)**:
 
-- **`RetroSend_with_Python.sis`**: RetroSend **plus** Nokia's Python for S60 1.4.5 runtime, in one package. This is all you need.
-- `RetroSend.sis`: the app alone, if Python for S60 1.4.5 is already installed.
+- **`RetroSend-<version>-S60v3-with-Python.sis`**: RetroSend **plus** Nokia's Python for S60 1.4.5 runtime, in one package. This is all you need.
+- `RetroSend-<version>-S60v3.sis`: the app alone, if Python for S60 1.4.5 is already installed.
+- `retrosend-<version>.py`: the same app as a script, to run from the Python Script Shell (useful for seeing errors).
+- `PythonForS60_1_4_5_3rdEd.sis`: the runtime alone, as published by Nokia.
+- `SHA256SUMS.txt`: checksums.
 
 On the phone:
 
@@ -119,7 +122,7 @@ sh pys60/tests/run.sh          # Python 2.2 syntax check + protocol, sweep, medi
 
 `pys60/build_sis.sh` creates a self-signed certificate in `pys60/cert/` on first run. It's valid 2008-2037; see the install notes for why. Keep the key private: it's in `.gitignore`.
 
-**Running without installing:** install Python for S60 and its *Script Shell*, copy `pys60/dist/retrosend.py` to `E:\Python\`, then *Python → Options → Run script*. Errors show on screen.
+**Running without installing:** install Python for S60 and its *Script Shell*, copy `retrosend-<version>.py` from the release (or `pys60/dist/retrosend.py`) to `E:\Python\`, then *Python → Options → Run script*. Errors show on screen.
 
 ## How it works
 
