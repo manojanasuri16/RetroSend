@@ -100,7 +100,7 @@ import struct
 #@INLINE media.py
 from media import read_id3, video_info, human_duration
 
-VERSION = u"1.1.4"  # single source of truth: build_sis.sh reads this
+VERSION = u"1.2.0"  # single source of truth: build_sis.sh reads this
 API = "/api/localsend/v2/"
 MULTICAST = "224.0.0.167"
 DEFAULT_PORT = 53317
@@ -994,6 +994,9 @@ class Server:
                             "done": {}, "total": total, "got": 0, "last": 0,
                             "touched": time.time(), "from": dev["alias"]})
             sc.respond(200, {"sessionId": sid, "files": tokens})
+            f = getattr(self.ev, "receive_start", None)
+            if f is not None:
+                f(dev, len(files), total)
             self.ev.progress(u"Receiving from " + dev["alias"], 0, total)
 
         self.ev.ask_accept(dev, flist, total, answer)
@@ -1475,529 +1478,10 @@ class PhoneNet:
         self.app.safe(self.on_packet, data, addr[0])
 
 
-# ---------------------------------------------------------------- file picker
-#
-# A Canvas screen: preview box on top (photo thumbnail, album art, video
-# length), a list with checkboxes below. Up/Down move, centre key opens a
-# folder or marks a file, Left goes up a folder, Options > Send marked.
-
-IMAGE_EXT = ["jpg", "jpeg", "png", "gif", "bmp"]
-AUDIO_EXT = ["mp3", "m4a", "aac", "amr", "wav", "wma"]
-VIDEO_EXT = ["mp4", "3gp", "m4v", "3g2"]
-
-
-def file_ext(name):
-    i = name.rfind(".")
-    if i < 0:
-        return ""
-    return name[i + 1:].lower()
-
-
-def ext_in(name, lst):
-    e = file_ext(name)
-    for x in lst:
-        if x == e:
-            return 1
-    return 0
-
-
-def exif_thumb(path):
-    """The small JPEG preview that cameras store inside the photo, or None."""
-    try:
-        f = open(path, "rb")
-        head = f.read(65536)
-        f.close()
-    except:
-        return None
-    if head[:2] != "\xff\xd8":
-        return None
-    # FFD8 followed by FF: a real start marker (plain FFD8 can occur in EXIF data)
-    i = head.find("\xff\xd8\xff", 2)
-    if i < 0:
-        return None
-    j = head.find("\xff\xd9", i)
-    if j < 0:
-        return None
-    return head[i:j + 2]
-
-
-def temp_dir():
-    for d in ["D:\\", "C:\\Data\\", "E:\\"]:
-        if os.path.isdir(d):
-            return d
-    return ""
-
-
-class Picker:
-    def __init__(self, app, start, on_done, view_only=0, marked=None, root=None):
-        self.app = app
-        self.path = start
-        self.root = root or start
-        self.on_done = on_done
-        self.view_only = view_only
-        if marked is None:
-            marked = {}
-        self.marked = marked    # path -> 1 (shared with the photo grid)
-        self.names = {}         # path -> name to send, e.g. u"Album/song.mp3"
-        self.entries = []       # (label, name, is_dir)
-        self.cur = 0
-        self.top = 0
-        self.cache = {}         # path -> image or None
-        self.cache_order = []
-        self.info = {}          # path -> list of text lines
-        self.timer = None
-        self.canvas = None
-        self.closed = 0
-
-    # ---- set up / tear down
-
-    def show(self):
-        a = appuifw.app
-        self.saved = (a.body, a.menu, a.exit_key_handler, a.title)
-        try:
-            a.set_tabs([], None)
-        except:
-            pass
-        self.canvas = appuifw.Canvas(redraw_callback=self.redraw)
-        a.body = self.canvas
-        a.exit_key_handler = self.back
-        c = self.canvas
-        c.bind(key_codes.EKeyUpArrow, lambda self=self: self.move(-1))
-        c.bind(key_codes.EKeyDownArrow, lambda self=self: self.move(1))
-        c.bind(key_codes.EKeySelect, self.activate)
-        c.bind(key_codes.EKeyLeftArrow, self.up)
-        c.bind(key_codes.EKeyRightArrow, self.activate)
-        try:
-            c.bind(key_codes.EKey5, self.activate)
-            c.bind(key_codes.EKey2, lambda self=self: self.move(-1))
-            c.bind(key_codes.EKey8, lambda self=self: self.move(1))
-        except:
-            pass
-        self.load_dir()
-        self.update_menu()
-
-    def update_menu(self):
-        n = len(self.marked)
-        menu = [(u"Send marked (%d)" % n, self.finish)]
-        if self.view_only:
-            menu.append((u"Open file", self.open_current))
-            menu.append((u"Mark / unmark", self.toggle_current))
-        else:
-            menu.append((u"Mark / unmark", self.toggle_current))
-            menu.append((u"Open file", self.open_current))
-        menu.append((u"Mark whole folder", self.mark_folder))
-        menu.append((u"Mark all files here", self.mark_all))
-        menu.append((u"Unmark all", self.unmark_all))
-        menu.append((u"Grid view (photos)", self.to_grid))
-        menu.append((u"Close", self.cancel))
-        appuifw.app.menu = menu
-        title = u"%d marked" % n
-        if n == 0:
-            title = to_u(self.path)[-28:]
-        appuifw.app.title = title
-
-    def close(self):
-        if self.closed:
-            return
-        self.closed = 1
-        if self.timer is not None:
-            try:
-                self.timer.cancel()
-            except:
-                pass
-        self.cache = {}
-        self.app.restore_main()
-
-    def cancel(self):
-        self.close()
-
-    def finish(self):
-        paths = self.marked.keys()
-        if not paths:
-            cur = self.current_file()
-            if cur is None:
-                appuifw.note(u"Mark files with the centre key first.", "info")
-                return
-            paths = [cur]
-        paths.sort()
-        names = self.names
-        self.close()
-        self.on_done(paths, names)
-
-    def open_current(self):
-        p = self.current_file()
-        if p is None:
-            appuifw.note(u"Select a file first.", "info")
-            return
-        self.app.open_file(p)
-
-    def to_grid(self):
-        marked = self.marked
-        path = self.path
-        self.close()
-        self.app.switch_to_grid(path, marked, self.root)
-
-    def mark_folder(self):
-        """Marks every file in the selected folder (and its subfolders)."""
-        e = self.current()
-        if e is None or not e[2] or e[1] is None:
-            appuifw.note(u"Select a folder first (not ..).", "info")
-            return
-        top = self.path + e[1] + "\\"
-        stack = [(top, to_u(e[1]) + u"/")]
-        count = 0
-        while stack and count < 500:
-            d, prefix = stack[0]
-            del stack[0]
-            try:
-                names = os.listdir(d)
-            except:
-                continue
-            names.sort()
-            for n in names:
-                if n[:1] == "_" or n[:1] == ".":
-                    continue
-                full = d + n
-                if os.path.isdir(full):
-                    stack.append((full + "\\", prefix + to_u(n) + u"/"))
-                elif count < 500:
-                    self.marked[full] = 1
-                    self.names[full] = prefix + to_u(n)
-                    count = count + 1
-        appuifw.note(u"Marked %d file(s) in %s" % (count, to_u(e[1])), "info")
-        self.update_menu()
-        self.redraw(None)
-
-    # ---- folder contents
-
-    def load_dir(self):
-        try:
-            names = os.listdir(self.path)
-        except:
-            appuifw.note(u"Cannot open " + to_u(self.path), "error")
-            names = []
-        dirs = []
-        files = []
-        for n in names:
-            if n[:1] == "_" or n[:1] == ".":
-                continue  # hidden system folders like _PAlbTN
-            if os.path.isdir(self.path + n):
-                dirs.append(n)
-            else:
-                files.append(n)
-        dirs.sort()
-        files.sort()
-        self.entries = []
-        if self.path != self.root and len(self.path) > 3:
-            self.entries.append((u"..", None, 1))
-        for n in dirs:
-            self.entries.append((to_u(n), n, 1))
-        for n in files:
-            self.entries.append((to_u(n), n, 0))
-        self.cur = 0
-        self.top = 0
-        self.schedule_preview()
-        self.redraw(None)
-
-    def current(self):
-        if 0 <= self.cur < len(self.entries):
-            return self.entries[self.cur]
-        return None
-
-    def current_file(self):
-        e = self.current()
-        if e is None or e[2]:
-            return None
-        return self.path + e[1]
-
-    # ---- keys
-
-    def move(self, d):
-        if not self.entries:
-            return
-        self.cur = (self.cur + d) % len(self.entries)
-        self.schedule_preview()
-        self.redraw(None)
-
-    def activate(self):
-        e = self.current()
-        if e is None:
-            return
-        if e[2]:
-            if e[1] is None:
-                self.up()
-            else:
-                self.path = self.path + e[1] + "\\"
-                self.load_dir()
-            return
-        if self.view_only:
-            self.open_current()
-        else:
-            self.toggle_current()
-
-    def toggle_current(self):
-        p = self.current_file()
-        if p is None:
-            return
-        if self.marked.has_key(p):
-            del self.marked[p]
-        else:
-            self.marked[p] = 1
-        self.update_menu()
-        self.redraw(None)
-
-    def mark_all(self):
-        for e in self.entries:
-            if not e[2]:
-                self.marked[self.path + e[1]] = 1
-        self.update_menu()
-        self.redraw(None)
-
-    def unmark_all(self):
-        self.marked.clear()
-        self.names.clear()
-        self.update_menu()
-        self.redraw(None)
-
-    def up(self):
-        if self.path == self.root or len(self.path) <= 3:
-            return
-        p = self.path[:-1]
-        self.path = p[:p.rfind("\\") + 1]
-        self.load_dir()
-
-    def back(self):
-        if self.path != self.root and len(self.path) > 3:
-            self.up()
-        else:
-            self.cancel()
-
-    # ---- preview
-
-    def schedule_preview(self):
-        if self.timer is not None:
-            try:
-                self.timer.cancel()
-            except:
-                pass
-        p = self.current_file()
-        if p is None or self.cache.has_key(p):
-            return
-        try:
-            self.timer = e32.Ao_timer()
-            self.timer.after(0.3, self.load_preview)  # wait until scrolling stops
-        except:
-            self.load_preview()
-
-    def load_preview(self):
-        p = self.current_file()
-        if p is None or self.closed or self.cache.has_key(p):
-            return
-        img = None
-        lines = []
-        name = os.path.basename(p)
-        try:
-            size = os.path.getsize(p)
-        except:
-            size = 0
-        lines.append(human_size(size))
-        try:
-            if ext_in(name, IMAGE_EXT):
-                img = self.image_preview(p, size, lines)
-            elif ext_in(name, AUDIO_EXT):
-                img = self.audio_preview(p, lines)
-            elif ext_in(name, VIDEO_EXT):
-                secs = video_info(p)
-                if secs:
-                    lines.append(u"Video " + human_duration(secs))
-                else:
-                    lines.append(u"Video")
-        except:
-            self.app.log(u"preview: " + err_text())
-        self.remember(p, img, lines)
-        self.redraw(None)
-
-    def remember(self, p, img, lines):
-        self.cache[p] = img
-        self.info[p] = lines
-        self.cache_order.append(p)
-        if len(self.cache_order) > 12:
-            old = self.cache_order[0]
-            del self.cache_order[0]
-            try:
-                del self.cache[old]
-            except:
-                pass
-
-    def fit(self, img):
-        w, h = self.box_size()
-        try:
-            return img.resize((w, h), keepaspect=1)
-        except:
-            return img
-
-    def open_bytes(self, data, ext):
-        tmp = temp_dir() + "retrosend_preview." + ext
-        f = open(tmp, "wb")
-        f.write(data)
-        f.close()
-        return graphics.Image.open(tmp)
-
-    def image_preview(self, p, size, lines):
-        t = exif_thumb(p)
-        if t:
-            try:
-                return self.fit(self.open_bytes(t, "jpg"))
-            except:
-                pass
-        try:
-            dims = graphics.Image.inspect(p)["size"]
-            lines.append(u"%dx%d" % (dims[0], dims[1]))
-            if dims[0] * dims[1] > 1300000:
-                lines.append(u"(too big to preview)")
-                return None
-        except:
-            if size > 600000:
-                return None
-        return self.fit(graphics.Image.open(p))
-
-    def audio_preview(self, p, lines):
-        tag = read_id3(p)
-        if tag.get(u"title"):
-            lines.append(tag[u"title"])
-        if tag.get(u"artist"):
-            lines.append(tag[u"artist"])
-        if tag.get(u"album"):
-            lines.append(tag[u"album"])
-        if tag.get("art"):
-            try:
-                return self.fit(self.open_bytes(tag["art"], tag.get("art_ext") or "jpg"))
-            except:
-                lines.append(u"(art not readable)")
-        return None
-
-    # ---- drawing
-
-    def box_size(self):
-        w, h = self.canvas_size()
-        ph = self.preview_height()
-        bw = int(w * 45 / 100)
-        return (bw - 4, ph - 8)
-
-    def canvas_size(self):
-        try:
-            return self.canvas.size
-        except:
-            return (240, 234)
-
-    def preview_height(self):
-        w, h = self.canvas_size()
-        ph = int(h * 42 / 100)
-        if ph > 140:
-            ph = 140
-        return ph
-
-    def redraw(self, rect):
-        c = self.canvas
-        if c is None or self.closed:
-            return
-        try:
-            self.draw(c)
-        except:
-            self.app.log(u"draw: " + err_text())
-
-    def draw(self, c):
-        w, h = self.canvas_size()
-        ph = self.preview_height()
-        BLUE = 0x146EDC
-        c.clear(0xFFFFFF)
-        # preview box
-        c.rectangle((0, 0, w, ph), fill=0xEEF3FA)
-        bw, bh = self.box_size()
-        c.rectangle((2, 4, 2 + bw, 4 + bh), outline=0xB0C4DE, fill=0xFFFFFF)
-        p = self.current_file()
-        e = self.current()
-        tx = bw + 8
-        if p is not None:
-            img = self.cache.get(p)
-            if img is not None:
-                iw, ih = img.size
-                c.blit(img, target=(2 + (bw - iw) / 2, 4 + (bh - ih) / 2))
-            else:
-                kind = u"FILE"
-                if ext_in(p, IMAGE_EXT):
-                    kind = u"PHOTO"
-                elif ext_in(p, AUDIO_EXT):
-                    kind = u"MUSIC"
-                elif ext_in(p, VIDEO_EXT):
-                    kind = u"VIDEO"
-                if not self.cache.has_key(p):
-                    kind = u"..."
-                c.text((10, 4 + bh / 2 + 5), kind, fill=0x7A8CA5, font="dense")
-            lines = [to_u(os.path.basename(p))] + self.info.get(p, [])
-            y = 18
-            for line in lines[:6]:
-                c.text((tx, y), clip(line, (w - tx) / 6), fill=0x202020, font="dense")
-                y = y + 16
-            if self.marked.has_key(p):
-                c.text((tx, ph - 6), u"[x] marked", fill=BLUE, font="dense")
-        elif e is not None:
-            c.text((tx, 24), u"Folder", fill=0x202020, font="dense")
-            c.text((tx, 40), clip(e[0], (w - tx) / 6), fill=0x202020, font="dense")
-            c.text((tx, ph - 6), u"Centre: open", fill=0x7A8CA5, font="dense")
-        # list
-        rh = 18
-        rows = (h - ph - 2) / rh
-        if rows < 1:
-            rows = 1
-        if self.cur < self.top:
-            self.top = self.cur
-        if self.cur >= self.top + rows:
-            self.top = self.cur - rows + 1
-        y = ph + 2
-        i = self.top
-        while i < len(self.entries) and i < self.top + rows:
-            label, name, is_dir = self.entries[i]
-            sel = (i == self.cur)
-            fg = 0x000000
-            if sel:
-                c.rectangle((0, y, w, y + rh), fill=BLUE)
-                fg = 0xFFFFFF
-            if is_dir:
-                box = u"> "
-            elif self.marked.has_key(self.path + name):
-                box = u"[x] "
-            else:
-                box = u"[  ] "
-            c.text((4, y + rh - 4), box + clip(label, (w - 30) / 6), fill=fg, font="dense")
-            y = y + rh
-            i = i + 1
-        if not self.entries:
-            c.text((8, ph + 20), u"(empty folder)", fill=0x7A8CA5, font="dense")
-
-
-def on_off(flag):
-    if flag:
-        return u"ON"
-    return u"OFF"
-
-
-def entry_labels(entries):
-    out = []
-    for label, action in entries:
-        out.append(label)
-    return out
-
-
-def clip(s, n):
-    s = to_u(s)
-    n = int(n)
-    if n < 4:
-        n = 4
-    if len(s) > n:
-        return s[:n - 1] + u"~"
-    return s
-
+# picker.py (file picker, previews, small helpers) is pasted here by build_sis.sh;
+# on the PC it is imported and its names are added to this module.
+#@INLINE picker.py
+import picker as _pk; _pk.__dict__.update(globals()); [globals().setdefault(_k, _v) for _k, _v in _pk.__dict__.items() if _k[:2] != "__"]
 
 # grid.py (photo grid) and webshare.py (browser sharing) are pasted here by
 # build_sis.sh; on the PC they are imported and given this module's helpers.
@@ -2005,6 +1489,16 @@ def clip(s, n):
 import grid as _gr; _gr.__dict__.update(globals()); PhotoGrid = _gr.PhotoGrid
 #@INLINE webshare.py
 import webshare as _ws; _ws.__dict__.update(globals()); WebShare = _ws.WebShare
+#@INLINE transfer.py
+import transfer as _tr; _tr.__dict__.update(globals()); TransferScreen = _tr.TransferScreen
+
+
+def entry_rows(entries):
+    """(title, hint, action) entries -> double-line list rows."""
+    rows = []
+    for e in entries:
+        rows.append((e[0], e[1]))
+    return rows
 
 
 # ---------------------------------------------------------------- phone app
@@ -2100,6 +1594,8 @@ class App:
         out["savedir"] = to_b(cfg.get(u"savedir", to_u(default_dir)))
         out["sort"] = int(cfg.get(u"sort", 1))
         out["web"] = int(cfg.get(u"web", 0))
+        out["last"] = to_b(cfg.get(u"last", u""))
+        out["welcomed"] = int(cfg.get(u"welcomed", 0))
         out["recent"] = []
         for r in cfg.get(u"recent", []):
             out["recent"].append(to_b(r))
@@ -2118,7 +1614,8 @@ class App:
         c = self.cfg
         d = {"fingerprint": c["fingerprint"], "alias": c["alias"], "port": c["port"],
              "auto": c["auto"], "savedir": to_u(c["savedir"]), "sort": c["sort"],
-             "web": c["web"]}
+             "web": c["web"], "last": to_u(c.get("last", "")),
+             "welcomed": c.get("welcomed", 0)}
         rec = []
         for r in c["recent"][-30:]:
             rec.append(to_u(r))
@@ -2267,7 +1764,24 @@ class App:
         self.net.later(0, lambda dev=dev, text=text:
                        appuifw.query(u"From " + dev["alias"] + u":", "text", text))
 
+    def transfer_screen(self):
+        """The full-screen progress view (transfer.py), if it's available."""
+        if getattr(self, "ts", None) is None:
+            cls = globals().get("TransferScreen")
+            if cls is None:
+                return None
+            self.ts = cls(self)
+        return self.ts
+
+    def receive_start(self, dev, nfiles, total):
+        ts = self.transfer_screen()
+        if ts is not None and not ts.visible():
+            ts.start("receive", dev["alias"], nfiles, total)
+
     def progress(self, title, done, total):
+        ts = self.transfer_screen()
+        if ts is not None and ts.visible():
+            ts.update(title, done, total)
         now = time.time()
         if done == 0 or not getattr(self, "xfer_t0", 0) or done < getattr(self, "xfer_last", 0):
             self.xfer_t0 = now
@@ -2285,11 +1799,17 @@ class App:
         else:
             self.set_title(u"%d%% %s" % (pct, title))
 
-    def finished(self, msg):
+    def finished(self, msg, ok=None):
         self.log(msg)
         self.set_title(u"RetroSend")
+        if ok is None:
+            ok = (msg[:4] == u"Sent" or msg[:8] == u"Received" or msg[:12] == u"Message sent")
         self.net.later(0, self.update_menu)
-        self.net.later(0, lambda msg=msg: appuifw.note(msg, "conf"))
+        ts = self.transfer_screen()
+        if ts is not None and ts.visible():
+            ts.finish(msg, ok)
+        else:
+            self.net.later(0, lambda msg=msg: appuifw.note(msg, "conf"))
         self.refresh()
 
     def open_file(self, path):
@@ -2551,48 +2071,77 @@ class App:
 
     # ---- UI
 
+    # Each entry: (title, hint shown under it, action). The tabs use the
+    # S60 double-line list style.
+
     def send_entries(self):
-        return [(u"Send a photo", lambda self=self: self.pick_media("photo")),
-                (u"Send a video", lambda self=self: self.pick_media("video")),
-                (u"Send music", lambda self=self: self.pick_media("music")),
-                (u"Send any file or folder", self.pick_from_drives),
-                (u"Send contacts", self.send_contacts),
-                (u"Send text message", self.send_text),
-                (u"Share files to a browser", self.share_to_browser),
-                (u"Devices", self.show_devices)]
+        n = len(self.peers)
+        if n == 0:
+            devs = u"None yet: Scan or add by IP"
+        elif n == 1:
+            devs = self.peers[0]["alias"]
+        else:
+            devs = u"%d devices: %s, ..." % (n, self.peers[0]["alias"])
+        web = u"Any browser on the Wi-Fi, no app needed"
+        if self.cfg["web"] and self.ip:
+            web = u"On: http://%s:%d/" % (to_u(self.ip), self.cfg["port"])
+        return [(u"Send photos", u"Pick from thumbnails", lambda self=self: self.pick_media("photo")),
+                (u"Send videos", u"From your Videos folder", lambda self=self: self.pick_media("video")),
+                (u"Send music", u"Songs with album art", lambda self=self: self.pick_media("music")),
+                (u"Send files or folders", u"Browse any drive", self.pick_from_drives),
+                (u"Send contacts", u"As a .vcf file", self.send_contacts),
+                (u"Send a message", u"Text shown on the other device", self.send_text),
+                (u"Share to a browser", web, self.share_to_browser),
+                (u"Devices", devs, self.show_devices)]
 
     def recv_entries(self):
         nothing = lambda: None
         if self.server_error:
-            status = u"Receiving OFF: " + self.server_error
+            status = u"Not receiving"
+            where = self.server_error
         elif self.server is None:
             status = u"Starting..."
+            where = u"Connecting to Wi-Fi"
         else:
             status = u"Ready to receive"
-        ip = u"IP: unknown (Options > Change Wi-Fi)"
-        if self.ip:
-            ip = u"IP: %s:%d" % (to_u(self.ip), self.cfg["port"])
-        web = u"Browser sharing: OFF"
-        if self.cfg["web"]:
-            web = u"Browser sharing: ON"
+            where = self.cfg["alias"]
             if self.ip:
-                web = u"Browser: http://%s:%d/" % (to_u(self.ip), self.cfg["port"])
-        return [(status, nothing),
-                (u"Name: " + self.cfg["alias"], self.rename),
-                (ip, nothing),
-                (u"Received files", self.show_recent),
-                (u"Browse received folder", lambda self=self: self.browse(self.cfg["savedir"], 1)),
-                (u"Auto-accept: " + on_off(self.cfg["auto"]), self.toggle_auto),
-                (u"Sort into Images/Music/Videos: " + on_off(self.cfg["sort"]), self.toggle_sort),
-                (web, self.toggle_web),
-                (u"Log", self.show_log),
-                (u"About RetroSend " + VERSION, self.help)]
+                where = u"%s, %s" % (self.cfg["alias"], to_u(self.ip))
+        n = 0
+        for r in self.cfg["recent"]:
+            n = n + 1
+        recent = u"Nothing yet"
+        if n:
+            recent = u"Last %d: open or send on" % n
+        if self.cfg["auto"]:
+            auto = u"On: saved without asking"
+        else:
+            auto = u"Off: you're asked each time"
+        if self.cfg["sort"]:
+            sort = u"On: Gallery and Music find them"
+        else:
+            sort = u"Off: everything to " + to_u(self.cfg["savedir"])
+        web = u"Off"
+        if self.cfg["web"]:
+            web = u"On"
+            if self.ip:
+                web = u"On: http://%s:%d/" % (to_u(self.ip), self.cfg["port"])
+        return [(status, where, nothing),
+                (u"Received files", recent, self.show_recent),
+                (u"Received folder", to_u(self.cfg["savedir"]),
+                 lambda self=self: self.browse(self.cfg["savedir"], 1)),
+                (u"Auto-accept", auto, self.toggle_auto),
+                (u"Sort into Images/Music/Videos", sort, self.toggle_sort),
+                (u"Browser sharing", web, self.toggle_web),
+                (u"Device name", self.cfg["alias"], self.rename),
+                (u"Log", u"What happened, for troubleshooting", self.show_log),
+                (u"About", u"RetroSend " + VERSION + u", help", self.help)]
 
     def send_items(self):
-        return entry_labels(self.send_entries())
+        return entry_rows(self.send_entries())
 
     def recv_items(self):
-        return entry_labels(self.recv_entries())
+        return entry_rows(self.recv_entries())
 
     def toggle_auto(self):
         self.cfg["auto"] = 1 - self.cfg["auto"]
@@ -2716,7 +2265,7 @@ class App:
         else:
             entries = self.recv_entries()
         if 0 <= i < len(entries):
-            entries[i][1]()
+            entries[i][2]()
 
     # ---- choosing files
 
@@ -2820,9 +2369,22 @@ class App:
         self.log(u"choose device for %d item(s), first %s (%d known)" %
                  (len(items), items[0]["name"], len(self.peers)))
         while 1:
+            # the device you sent to last comes first
+            last = self.cfg.get("last")
+            first = []
+            others = []
+            for p in self.peers:
+                if p["ip"] == last:
+                    first.append(p)
+                else:
+                    others.append(p)
+            self.peers = first + others
             labels = []
             for p in self.peers:
-                labels.append(p["alias"] + u" (" + to_u(p["ip"]) + u")")
+                if p["ip"] == last:
+                    labels.append(p["alias"] + u" (last used)")
+                else:
+                    labels.append(p["alias"] + u" (" + to_u(p["ip"]) + u")")
             labels.append(u"Scan again")
             labels.append(u"Enter IP address...")
             what = u"Send to"
@@ -2923,12 +2485,21 @@ class App:
         self.client = c
         self.update_menu()
         self.log(u"sending to " + dev["alias"] + u" " + to_u(dev["ip"]) + u":%d" % dev["port"])
-        self.net.later(0, lambda: appuifw.note(u"Sending. To stop: Options > Cancel sending",
-                                               "info"))
+        total = 0
+        for it in items:
+            total = total + it["size"]
+        ts = self.transfer_screen()
+        if ts is not None:
+            ts.start("send", dev["alias"], len(items), total)
+        else:
+            self.net.later(0, lambda: appuifw.note(
+                u"Sending. To stop: Options > Cancel sending", "info"))
 
-        def done(msg, self=self):
+        def done(msg, self=self, dev=dev):
             self.client = None
-            self.finished(msg)
+            self.cfg["last"] = dev["ip"]
+            self.save_cfg()
+            self.finished(msg, 1)
 
         def bad(msg, self=self, dev=dev, items=items):
             self.client = None
@@ -2939,6 +2510,9 @@ class App:
                 return
             self.set_title(u"RetroSend")
             self.update_menu()
+            ts = self.transfer_screen()
+            if ts is not None and ts.visible():
+                ts.hide()
             # keep the files: offer to retry or pick another device
             self.net.later(0, lambda self=self, dev=dev, items=items, msg=msg:
                            self.send_failed(dev, items, msg))
@@ -3033,6 +2607,13 @@ class App:
                      u"Same Wi-Fi as this phone. If this phone is not listed there, "
                      u"use Add by IP here with the IP shown in LocalSend.", "info")
 
+    def welcome(self):
+        self.cfg["welcomed"] = 1
+        self.save_cfg()
+        appuifw.note(u"Welcome to RetroSend! On your other device, open LocalSend and turn "
+                     u"Encryption off (Settings). Then use Send or Receive here. "
+                     u"Left/right switches tabs.", "info")
+
     def tick(self):
         self.ticks = self.ticks + 1
         if self.ticks <= 15 or self.ticks % 30 == 0:
@@ -3063,6 +2644,8 @@ class App:
         self.ticks = 0
         self.net.later(2, self.tick)
         self.net.later(1, self.start_network)
+        if not self.cfg["welcomed"]:
+            self.net.later(2, self.welcome)
         boot_log("waiting for user")
         self.lock.wait()
         appuifw.app.set_tabs([], None)

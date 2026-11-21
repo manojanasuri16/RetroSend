@@ -10,6 +10,7 @@ $PY2 tests/test_pys60.py
 "$PY2" tests/test_media.py
 "$PY2" tests/test_picker.py
 "$PY2" -u tests/test_cancel.py
+python3 tools/check_py22.py picker.py
 python3 tools/check_py22.py grid.py
 "$PY2" tests/test_grid.py
 python3 tools/check_py22.py webshare.py
@@ -17,3 +18,6 @@ python3 tools/check_py22.py webshare.py
 "$PY2" tests/test_app.py
 "$PY2" -u tests/test_web_routing.py
 "$PY2" -u tests/test_sendflow.py
+python3 tools/check_py22.py transfer.py
+"$PY2" tests/test_transfer.py
+"$PY2" tests/test_starter.py

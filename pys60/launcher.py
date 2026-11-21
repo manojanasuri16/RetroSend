@@ -54,7 +54,7 @@ def _fail(where):
 
 _ok = 1
 # load the helper modules one by one, so the log shows which one fails
-for _m in ["media", "grid", "webshare"]:
+for _m in ["media", "picker", "grid", "webshare", "transfer"]:
     if _ok:
         _log("starter: loading " + _m)
         try:

@@ -13,11 +13,13 @@ G = sys.modules[PhotoGrid.__module__].__dict__   # globals PhotoGrid uses
 
 class Canvas:
     size = (240, 234)
-    def __init__(self, redraw_callback=None, event_callback=None): self.binds = {}; self.ops = 0; self.blits = 0
+    def __init__(self, redraw_callback=None, event_callback=None):
+        self.binds = {}; self.ops = 0; self.blits = 0; self.texts = []; self.fills = []
     def bind(self, k, f): self.binds[k] = f
-    def clear(self, *a, **k): self.ops += 1
-    def rectangle(self, *a, **k): self.ops += 1
-    def text(self, *a, **k): self.ops += 1
+    def clear(self, *a, **k): self.ops += 1; self.texts = []; self.fills = []
+    def rectangle(self, *a, **k): self.ops += 1; self.fills.append(k.get("fill"))
+    def line(self, *a, **k): self.ops += 1
+    def text(self, pos, t, **k): self.ops += 1; self.texts.append(t)
     def blit(self, *a, **k): self.ops += 1; self.blits += 1
 appuifw.Canvas = Canvas
 
@@ -50,7 +52,8 @@ def run_timers(limit=1000):
 
 class FakeApp:
     def __init__(self): self.restored = 0; self.switched = None
-    def log(self, m): print("LOG " + repr(m))
+    logs = []
+    def log(self, m): print("LOG " + repr(m)); self.logs.append(m)
     def restore_main(self): self.restored += 1
     def switch_to_list(self, d, marked): self.switched = (d, marked)
 
@@ -100,6 +103,12 @@ check("scrolling loads newly visible photos", g.cache.has_key(root + "p09.jpg") 
 # marking
 g.cur = 1; g.activate(); g.cur = 2; g.activate()
 check("two marked (shared dict)", len(shared) == 2 and shared is g.marked)
+left, right = g.header_text()
+check("grid header shows marked count and size: %r" % right, right == u"2 marked \u00b7 2 B")
+check("grid header drawn", right in g.canvas.texts and left in g.canvas.texts)
+check("grid footer hint drawn", u"Centre: mark   Options: send" in g.canvas.texts)
+g.top_row = 0; g.redraw(None)   # the marked tiles were scrolled out of view above
+check("marked tiles tinted", G["TINT"] in g.canvas.fills)
 g.activate(); check("toggle off", len(shared) == 1)
 g.cur = 0; g.activate()     # folder: must not mark (opening uses \\ paths on the phone)
 check("menu shows count", appuifw.app.menu[0][0] == u"Send marked (1)" or len(shared) == 1)
@@ -135,5 +144,10 @@ g6 = PhotoGrid(app, root, lambda p: None, {}); g6.show()
 for k in range(0, 80, 3):
     g6.cur = k; g6.moved(); run_timers()
 check("cache limited to 40", len(g6.cache) <= 40 and len(g6.cache_order) <= 40)
+g7 = PhotoGrid(app, tempfile.mkdtemp() + os.sep, lambda p: None, {}); g7.show()
+check("grid: no scroll indicator for a short folder", G["SCROLL"] not in g7.canvas.fills)
+check("grid: empty message", u"No photos or folders here" in g7.canvas.texts)
+check("grid: scroll indicator for a long folder", G["SCROLL"] in g6.canvas.fills)
+check("grid: no draw errors", not [m for m in app.logs if m.find(u"draw") >= 0])
 print(fails and "FAILED" or "ALL PASSED")
 sys.exit(len(fails))

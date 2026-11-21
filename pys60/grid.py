@@ -8,7 +8,9 @@
 #
 # Pasted into retrosend.py after the Picker class; uses its globals
 # (appuifw, e32, graphics, key_codes, os, to_u, clip, exif_thumb, temp_dir,
-# IMAGE_EXT, ext_in, err_text).
+# IMAGE_EXT, ext_in, err_text) and the shared look from picker.py
+# (draw_header, draw_footer, draw_tick, draw_folder, draw_scrollbar,
+# folder_name, marked_summary and the colour constants).
 
 GRID_CACHE = 40
 GRID_CELL = 76
@@ -184,7 +186,7 @@ class PhotoGrid:
     def visible_rows(self):
         w, h = self.canvas_size()
         cw, ch = self.cell_size()
-        rows = int(h / ch)
+        rows = int((h - BAR_H - FOOT_H) / ch)
         if rows < 1:
             rows = 1
         return rows
@@ -384,15 +386,27 @@ class PhotoGrid:
             except:
                 pass
 
+    def header_text(self):
+        """(left, right) of the header bar: folder name and marked summary."""
+        return (folder_name(self.path), marked_summary(self.marked))
+
+    def footer_text(self):
+        return u"Centre: mark   Options: send"
+
     def draw(self, c):
-        BLUE = 0x146EDC
         w, h = self.canvas_size()
         cols = self.columns()
         cw, ch = self.cell_size()
         rows = self.visible_rows()
-        c.clear(0xFFFFFF)
+        c.clear(WHITE)
+        left, right = self.header_text()
+        draw_header(c, w, left, right)
+        top = BAR_H
         if not self.entries:
-            c.text((8, 24), u"(no photos or folders here)", fill=0x7A8CA5, font="dense")
+            msg = u"No photos or folders here"
+            c.text(((w - len(msg) * 6) / 2, top + (h - top - FOOT_H) / 2), msg, fill=GREY,
+                   font="dense")
+            draw_footer(c, w, h, self.footer_text())
             return
         i = self.top_row * cols
         last = i + rows * cols
@@ -401,36 +415,47 @@ class PhotoGrid:
             col = i % cols
             row = i / cols - self.top_row
             x = col * cw
-            y = row * ch
+            y = top + row * ch
             sel = (i == self.cur)
+            # tiles 1 px in from their cell: a 2 px gap between neighbours
+            x1 = x + 1
+            y1 = y + 1
+            x2 = x + cw - 1
+            y2 = y + ch - 1
             if kind == "img":
                 p = self.path + name
-                c.rectangle((x + 2, y + 2, x + cw - 2, y + ch - 2), fill=0xEEF3FA)
+                marked = self.marked.has_key(p)
+                bg = LIGHT
+                if marked:
+                    bg = TINT
+                c.rectangle((x1, y1, x2, y2), fill=bg)
                 img = self.cache.get(p)
                 if img is not None:
                     iw, ih = img.size
                     c.blit(img, target=(x + (cw - iw) / 2, y + (ch - ih) / 2))
                 else:
-                    ext = to_u(name[name.rfind(".") + 1:]).upper()
+                    ext = to_u(name[name.rfind(".") + 1:]).upper()[:4]
                     if not self.cache.has_key(p):
                         ext = u"..."
-                    c.text((x + 8, y + ch / 2 + 5), ext, fill=0x7A8CA5, font="dense")
-                if self.marked.has_key(p):
-                    c.rectangle((x + 1, y + 1, x + cw - 1, y + ch - 1), outline=BLUE)
-                    c.rectangle((x + 3, y + 3, x + cw - 3, y + ch - 3), outline=BLUE)
-                    c.rectangle((x + cw - 20, y + 4, x + cw - 4, y + 20), fill=BLUE)
-                    c.text((x + cw - 16, y + 17), u"x", fill=0xFFFFFF, font="dense")
-            else:
-                c.rectangle((x + 2, y + 2, x + cw - 2, y + ch - 2), fill=0xFFF4D6,
-                            outline=0xE0C070)
-                if kind == "up":
-                    c.text((x + cw / 2 - 8, y + ch / 2 + 5), u"..", fill=0x202020,
+                    c.text((x + (cw - len(ext) * 6) / 2, y + ch / 2 + 4), ext, fill=GREY,
                            font="dense")
-                else:
-                    c.text((x + 6, y + 18), u"Folder", fill=0x8A6A20, font="dense")
-                    c.text((x + 6, y + ch / 2 + 8), clip(label, (cw - 10) / 6),
-                           fill=0x202020, font="dense")
+                if marked:
+                    c.rectangle((x2 - 17, y1 + 2, x2 - 2, y1 + 17), fill=BLUE)
+                    draw_tick(c, x2 - 17, y1 + 2, 15, WHITE)
+            else:
+                c.rectangle((x1, y1, x2, y2), fill=0xFFF8E1)
+                fw = cw * 2 / 5
+                draw_folder(c, x + (cw - fw) / 2, y + ch / 4, fw, fw * 3 / 4)
+                text = label
+                if kind == "up":
+                    text = u".. up"
+                c.text((x + 5, y2 - 6), clip(text, (cw - 10) / 6), fill=TEXT, font="dense")
             if sel:
-                c.rectangle((x, y, x + cw, y + ch), outline=0x000000)
-                c.rectangle((x + 1, y + 1, x + cw - 1, y + ch - 1), outline=0x000000)
+                c.rectangle((x1, y1, x2, y2), outline=BLUE)
+                c.rectangle((x1 + 1, y1 + 1, x2 - 1, y2 - 1), outline=BLUE)
+                c.rectangle((x1 + 2, y1 + 2, x2 - 2, y2 - 2), outline=BLUE)
             i = i + 1
+        total_rows = (len(self.entries) + cols - 1) / cols
+        if total_rows > rows:
+            draw_scrollbar(c, w, top, top + rows * ch, self.top_row, rows, total_rows)
+        draw_footer(c, w, h, self.footer_text())

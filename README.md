@@ -44,7 +44,9 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 - **Remembers devices:** devices you've used are listed right away after a restart, and their addresses are re-checked automatically.
 - **Receive text messages**, shown on screen.
 - **Finds devices automatically:** remembered devices are re-checked at start. New LocalSend devices are located with a fast UDP search, about 12 seconds (needed on S60, see [How it works](#how-it-works)). You can also add a device by IP.
-- **Send | Receive tabs**, native S60 look, works with the keypad.
+- **Send | Receive tabs** with two-line items (a short hint under each), native S60 look, works with the keypad.
+- **Transfer screen:** a full-screen progress bar with file name, file N of M, size, speed and time left, plus Cancel. It ends with a clear done/failed result.
+- **Easy repeat sends:** the device you sent to last is listed first.
 - **No permission pop-ups:** it's a native app, so it gets its permissions once, at install, and it remembers your Wi-Fi network.
 
 ## Install
@@ -172,6 +174,8 @@ pys60/                  native S60 app (Python for S60 1.4.5)
   media.py              ID3 tags/album art and MP4 duration    } pasted into the app
   grid.py               photo grid screen                      } at build time
   webshare.py           browser sharing (web page, download/upload) }
+  picker.py             file picker, previews, shared drawing helpers }
+  transfer.py           full-screen transfer progress           }
   build_sis.sh          builds RetroSend.sis (reads VERSION from retrosend.py)
   icon.svg
   tests/                PC tests with stand-ins for the S60 modules (appuifw, e32, ...)

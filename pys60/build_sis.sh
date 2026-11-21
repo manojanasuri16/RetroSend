@@ -51,7 +51,8 @@ cp build/default.py dist/retrosend.py   # single-file version for the Script She
 rm -rf build/app && mkdir -p build/app
 cp launcher.py build/app/default.py
 cp retrosend.py build/app/rs_app.py
-cp media.py grid.py webshare.py build/app/
+# every module the app imports (keep in sync with the #@INLINE markers)
+for m in $(sed -n 's/^#@INLINE \(.*\.py\)$/\1/p' retrosend.py); do cp "$m" build/app/; done
 for f in build/app/*.py; do python3 tools/check_py22.py "$f" >/dev/null; done
 
 $PY $ENS py2sis --uid=0xE7A3D5C1 --appname=RetroSend --version=$VERSION \
