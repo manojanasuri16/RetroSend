@@ -9,3 +9,4 @@ $PY2 tests/test_pys60.py
 "$PY2" tests/test_sweep.py
 "$PY2" tests/test_media.py
 "$PY2" tests/test_picker.py
+"$PY2" -u tests/test_cancel.py

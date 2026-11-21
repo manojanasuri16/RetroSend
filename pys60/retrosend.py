@@ -901,6 +901,18 @@ class Server:
         else:
             sc.respond(404)
 
+    def receiving(self):
+        s = self.session
+        return s is not None and s.get("id") is not None
+
+    def stop_receiving(self):
+        """User pressed Stop receiving: drop the transfer and partial files."""
+        if not self.receiving():
+            return 0
+        self.end_session()  # closes the uploads; their partial files are deleted
+        self.ev.finished(u"Receiving stopped.")
+        return 1
+
     def end_session(self):
         s = self.session
         self.session = None
@@ -1933,6 +1945,7 @@ class App:
         self.tab = 0
         self.apo = None
         self.listbox = None
+        self.picker = None
 
     def safe(self, func, *args):
         """Runs a callback; errors are logged instead of breaking the app."""
@@ -2084,6 +2097,8 @@ class App:
                        appuifw.query(u"From " + dev["alias"] + u":", "text", text))
 
     def progress(self, title, done, total):
+        if done == 0:
+            self.update_menu()  # a transfer just started: show Cancel / Stop
         if total:
             self.set_title(u"%d%% %s" % (int(done * 100 / total), title))
         else:
@@ -2092,6 +2107,7 @@ class App:
     def finished(self, msg):
         self.log(msg)
         self.set_title(u"RetroSend")
+        self.net.later(0, self.update_menu)
         self.net.later(0, lambda msg=msg: appuifw.note(msg, "conf"))
         self.refresh()
 
@@ -2339,8 +2355,9 @@ class App:
 
     def restore_main(self):
         a = appuifw.app
+        self.picker = None
         a.body = self.listbox
-        a.menu = self.main_menu
+        self.update_menu()
         a.exit_key_handler = self.exit
         a.title = u"RetroSend"
         try:
@@ -2348,7 +2365,6 @@ class App:
             a.activate_tab(self.tab)
         except:
             pass
-        self.picker = None
         self.refresh()
 
     def send_text(self):
@@ -2445,7 +2461,10 @@ class App:
             return
         c = Client(self.cfg, self, self.net)
         self.client = c
+        self.update_menu()
         self.log(u"sending to " + dev["alias"] + u" " + to_u(dev["ip"]) + u":%d" % dev["port"])
+        self.net.later(0, lambda: appuifw.note(u"Sending. To stop: Options > Cancel sending",
+                                               "info"))
 
         def done(msg, self=self):
             self.client = None
@@ -2464,9 +2483,29 @@ class App:
 
     def cancel_send(self):
         if self.client is not None:
+            self.set_title(u"Cancelling...")
             self.client.cancel()
         else:
             appuifw.note(u"Nothing is being sent.", "info")
+
+    def stop_receiving(self):
+        if self.server is None or not self.server.stop_receiving():
+            appuifw.note(u"Nothing is being received.", "info")
+        self.update_menu()
+
+    def update_menu(self):
+        """Options menu; Cancel / Stop come first while a transfer runs."""
+        if getattr(self, "picker", None) is not None:
+            return  # the picker has its own menu
+        menu = []
+        if self.client is not None:
+            menu.append((u"Cancel sending", self.cancel_send))
+        if self.server is not None and self.server.receiving():
+            menu.append((u"Stop receiving", self.stop_receiving))
+        try:
+            appuifw.app.menu = menu + self.main_menu
+        except:
+            pass
 
     # ---- other screens
 
@@ -2510,12 +2549,11 @@ class App:
         appuifw.app.set_tabs([u"Send", u"Receive"], self.on_tab)
         self.main_menu = [(u"Scan for devices", self.scan),
                             (u"Add device by IP", self.add_by_ip),
-                            (u"Cancel sending", self.cancel_send),
                             (u"Device name", self.rename),
                             (u"Change Wi-Fi", self.change_ap),
                             (u"Help", self.help),
                             (u"Exit", self.exit)]
-        appuifw.app.menu = self.main_menu
+        self.update_menu()
         appuifw.app.exit_key_handler = self.exit
         boot_log("ui ready")
         self.refresh()
