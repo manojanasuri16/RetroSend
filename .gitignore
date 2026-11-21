@@ -1,0 +1,14 @@
+# downloaded by tools/setup.sh
+tools/mamba/
+tools/ensymble/
+phone-installs/
+# build output (releases are on GitHub Releases)
+pys60/build/
+pys60/dist/
+# signing key: never commit
+pys60/cert/
+*.pem
+# misc
+*.pyc
+retrosend_log*.txt
+E:*

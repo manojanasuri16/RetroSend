@@ -1,0 +1,50 @@
+#!/bin/sh
+# Builds the native S60 3rd Edition app from retrosend.py (+ media.py).
+#   dist/RetroSend.sis              app only (needs Python for S60 1.4.5 installed)
+#   dist/RetroSend_with_Python.sis  app + Nokia's signed Python for S60 1.4.5
+#                                   runtime in one package (if the runtime SIS is present)
+# Run ../tools/setup.sh once first to download the tools.
+set -e
+cd "$(dirname "$0")"
+PY=../tools/mamba/py27/bin/python2
+ENS=../tools/ensymble/src/ensymble.py
+RUNTIME=../phone-installs/PythonForS60_1_4_5_3rdEd.sis
+VERSION=1.0.0
+mkdir -p build dist cert
+
+# Self-signed certificate, valid 2008-2037 so it also installs when the phone's
+# date is set back (Nokia's runtime certificate has expired). Keep the key private.
+if [ ! -f cert/retrosend_key.pem ]; then
+  openssl req -x509 -newkey rsa:1024 -sha1 -nodes \
+    -not_before 20080101000000Z -not_after 20371231000000Z \
+    -subj "/CN=RetroSend/O=RetroSend" \
+    -keyout cert/retrosend_key.pem -out cert/retrosend_cert.pem
+  openssl rsa -in cert/retrosend_key.pem -traditional -out cert/retrosend_key.pem
+fi
+
+# One file for the phone: paste media.py in place of its import.
+python3 - <<'PY'
+src = open("retrosend.py").read()
+media = open("media.py").read()
+marker = "#@INLINE media.py\nfrom media import read_id3, video_info, human_duration\n"
+assert marker in src
+open("build/default.py", "w").write(src.replace(marker, media + "\n"))
+PY
+python3 tools/check_py22.py build/default.py
+cp build/default.py dist/retrosend.py
+
+$PY $ENS py2sis --uid=0xE7A3D5C1 --appname=RetroSend --version=$VERSION \
+  --caption=RetroSend --shortcaption=RetroSend --vendor=RetroSend --icon=icon.svg \
+  --caps=NetworkServices+LocalServices+ReadUserData+WriteUserData+UserEnvironment \
+  --heapsize=4k,4M --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
+  build/default.py dist/RetroSend.sis </dev/null >build/py2sis.log
+echo "built dist/RetroSend.sis"
+
+if [ -f "$RUNTIME" ]; then
+  $PY $ENS mergesis --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
+    dist/RetroSend.sis "$RUNTIME" dist/RetroSend_with_Python.sis </dev/null >build/mergesis.log
+  echo "built dist/RetroSend_with_Python.sis"
+else
+  echo "skipped RetroSend_with_Python.sis ($RUNTIME not found)"
+fi
+ls -la dist
