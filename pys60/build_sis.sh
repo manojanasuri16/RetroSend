@@ -1,8 +1,7 @@
 #!/bin/sh
 # Builds the native S60 3rd Edition app from retrosend.py (+ media.py).
 #   dist/RetroSend.sis              app only (needs Python for S60 1.4.5 installed)
-#   dist/RetroSend_with_Python.sis  app + Nokia's signed Python for S60 1.4.5
-#                                   runtime in one package (if the runtime SIS is present)
+#   dist/RetroSend_with_Python.sis  only with MERGE=1 (not recommended, see below)
 # Run ../tools/setup.sh once first to download the tools.
 set -e
 cd "$(dirname "$0")"
@@ -58,15 +57,18 @@ for f in build/app/*.py; do python3 tools/check_py22.py "$f" >/dev/null; done
 $PY $ENS py2sis --uid=0xE7A3D5C1 --appname=RetroSend --version=$VERSION \
   --caption=RetroSend --shortcaption=RetroSend --vendor=RetroSend --icon=icon.svg \
   --caps=NetworkServices+LocalServices+ReadUserData+WriteUserData+UserEnvironment \
-  --heapsize=4k,16M --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
+  --heapsize=4k,8M --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
   build/app dist/RetroSend.sis </dev/null >build/py2sis.log
 echo "built dist/RetroSend.sis"
 
-if [ -f "$RUNTIME" ]; then
+# The combined package is off by default: it registers the Python runtime as
+# part of RetroSend, so installing the app-only package over it (or removing
+# RetroSend) removes Python too and every Python app stops opening.
+if [ "$MERGE" = 1 ] && [ -f "$RUNTIME" ]; then
   $PY $ENS mergesis --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
     dist/RetroSend.sis "$RUNTIME" dist/RetroSend_with_Python.sis </dev/null >build/mergesis.log
   echo "built dist/RetroSend_with_Python.sis"
 else
-  echo "skipped RetroSend_with_Python.sis ($RUNTIME not found)"
+  rm -f dist/RetroSend_with_Python.sis
 fi
 ls -la dist

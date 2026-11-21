@@ -43,7 +43,7 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 - **Speed and time left** in the title bar while sending or receiving (e.g. `45% 120 KB/s 0:32 left`).
 - **Remembers devices:** devices you've used are listed right away after a restart, and their addresses are re-checked automatically.
 - **Receive text messages**, shown on screen.
-- **Finds devices automatically:** LocalSend multicast announcements plus a sweep of the local network (needed on S60, see [How it works](#how-it-works)). You can also add a device by IP.
+- **Finds devices automatically:** remembered devices are re-checked at start. New LocalSend devices are located with a fast UDP search, about 12 seconds (needed on S60, see [How it works](#how-it-works)). You can also add a device by IP.
 - **Send | Receive tabs**, native S60 look, works with the keypad.
 - **No permission pop-ups:** it's a native app, so it gets its permissions once, at install, and it remembers your Wi-Fi network.
 
@@ -51,10 +51,9 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 
 Download from the **[latest release](https://github.com/manojanasuri16/RetroSend/releases/latest)**:
 
-- **`RetroSend-<version>-S60v3-with-Python.sis`**: RetroSend **plus** Nokia's Python for S60 1.4.5 runtime, in one package. This is all you need.
-- `RetroSend-<version>-S60v3.sis`: the app alone, if Python for S60 1.4.5 is already installed.
-- `retrosend-<version>.py`: the same app as a script, to run from the Python Script Shell (useful for seeing errors).
-- `PythonForS60_1_4_5_3rdEd.sis`: the runtime alone, as published by Nokia.
+- **`PythonForS60_1_4_5_3rdEd.sis`**: Nokia's Python for S60 1.4.5 runtime (unchanged). Install it **once**.
+- **`RetroSend-<version>-S60v3.sis`**: the app. Install it after Python, and install each new version over the old one.
+- `retrosend-<version>.py`: the same app as a single script, to run from the Python Script Shell (useful for seeing errors).
 - `SHA256SUMS.txt`: checksums.
 
 On the phone:
@@ -62,11 +61,11 @@ On the phone:
 1. **Menu → Applications → App. mgr. → Options → Settings**
    - *Software installation*: **All**
    - *Online certificate check*: **Off**
-2. Copy the `.sis` to the phone (USB cable in *Mass storage* mode, Bluetooth, or a card reader). Open it in **File manager** and install.
-3. You'll see **one** "untrusted supplier" warning, because RetroSend is self-signed. Accept it.
-4. If it says **"Certificate expired"**, the culprit is Nokia's runtime certificate (it expired years ago). Set the phone's date to **2009**, install, then set the date back. RetroSend's own certificate is valid from 2008, so both install with the date set back.
+2. Copy the files to the phone (USB cable in *Mass storage* mode, Bluetooth, or a card reader). Open them in **File manager**.
+3. Install **`PythonForS60_1_4_5_3rdEd.sis`** first. If it says **"Certificate expired"** (Nokia's certificate is old), set the phone's date to **2009**, install, then set the date back.
+4. Install **`RetroSend-<version>-S60v3.sis`**. You'll see **one** "untrusted supplier" warning, because RetroSend is self-signed. Accept it.
 
-> **Upgrading from an older test build?** If the install is refused, remove the old RetroSend first (*App. mgr. → RetroSend → Options → Remove*).
+> **If RetroSend (or any Python app) does nothing when you open it,** the Python runtime is missing or damaged. Releases 1.0.0 to 1.1.1 offered a combined "with-Python" package, which could remove Python when it was replaced. Remove RetroSend and Python for S60 in App. mgr., then install Python and RetroSend again as above.
 
 ## Using RetroSend
 
@@ -98,7 +97,7 @@ RetroSend asks **once** which Wi-Fi network to use and remembers it. To change i
 | Options → Grid view / List view | Switch between the photo grid and the list |
 | Right softkey | Back / cancel |
 
-After *Send marked*, pick the device. If your device isn't listed, choose **Scan again** (this can take up to a minute) or **Enter IP address...** and type the IP shown in LocalSend.
+After *Send marked*, pick the device. If your device isn't listed, choose **Scan again** (finding a new device takes about 12 seconds) or **Enter IP address...** and type the IP shown in LocalSend.
 
 ### Receive tab
 - Shows **Ready to receive**, your name (select it to rename), and your IP (`192.168.x.x:53317`).
@@ -144,8 +143,8 @@ Tested on Linux (Manjaro). Needs `curl`, `git`, `python3` and `openssl`. Everyth
 
 ```sh
 tools/setup.sh                 # private Python 2.7, patched Ensymble, PyS60 runtime
-pys60/build_sis.sh             # -> pys60/dist/RetroSend.sis, RetroSend_with_Python.sis, retrosend.py
-sh pys60/tests/run.sh          # Python 2.2 syntax check + protocol, sweep, media and picker tests
+pys60/build_sis.sh             # -> pys60/dist/RetroSend.sis and retrosend.py
+sh pys60/tests/run.sh          # Python 2.2 syntax check + protocol, locate, media, picker, grid, web tests
 ```
 
 `pys60/build_sis.sh` creates a self-signed certificate in `pys60/cert/` on first run. It's valid 2008-2037; see the install notes for why. Keep the key private: it's in `.gitignore`.
@@ -154,14 +153,14 @@ sh pys60/tests/run.sh          # Python 2.2 syntax check + protocol, sweep, medi
 
 ## How it works
 
-RetroSend implements the receiving and sending parts of the **[LocalSend protocol v2](https://github.com/localsend/protocol)** over plain HTTP: `register`, `info`, `prepare-upload`, `upload` and `cancel`. Discovery is a UDP multicast announcement plus an HTTP sweep of the subnet. Text messages are a `text/plain` file with a `preview` field.
+RetroSend implements the receiving and sending parts of the **[LocalSend protocol v2](https://github.com/localsend/protocol)** over plain HTTP: `register`, `info`, `prepare-upload`, `upload` and `cancel`. Discovery is a UDP multicast announcement plus a UDP halving search for devices whose address PyS60 can't see. Text messages are a `text/plain` file with a `preview` field.
 
 The native app targets **Python for S60 1.4.5** (Python 2.2.2, 2008), so the code avoids anything newer than Python 2.2 (`tools/check_py22.py` enforces this). Along the way it hit several PyS60 quirks, documented in **[docs/PYS60-NOTES.md](docs/PYS60-NOTES.md)**:
 
 - Sockets only work on the **main thread**, through callbacks. A background thread has no Symbian active scheduler, and the app freezes. RetroSend is fully single-threaded and event-driven.
 - `socket.close()` **stops the whole Wi-Fi connection** and closes the shared socket server, so RetroSend never closes sockets while running (it uses `shutdown()` instead).
 - `bind(("", port))` fails. Use `"0.0.0.0"`.
-- `accept()` reports a wrong peer address (`0.8.0.0`), and `getpeername()` isn't implemented. That's why devices are discovered by sweeping the network.
+- `accept()` reports a wrong peer address (`0.8.0.0`), and `getpeername()` isn't implemented. So when a LocalSend device registers, RetroSend finds its IP by announcing to half of the remaining addresses per round (UDP, no connections) and watching for its answer.
 - `random.randint(0, 0x7fffffff)` overflows on Python 2.2.
 
 ## Project layout
@@ -173,7 +172,7 @@ pys60/                  native S60 app (Python for S60 1.4.5)
   media.py              ID3 tags/album art and MP4 duration    } pasted into the app
   grid.py               photo grid screen                      } at build time
   webshare.py           browser sharing (web page, download/upload) }
-  build_sis.sh          builds RetroSend.sis and RetroSend_with_Python.sis
+  build_sis.sh          builds RetroSend.sis (reads VERSION from retrosend.py)
   icon.svg
   tests/                PC tests with stand-ins for the S60 modules (appuifw, e32, ...)
   tools/check_py22.py   rejects Python features newer than 2.2
@@ -185,5 +184,5 @@ docs/PYS60-NOTES.md     PyS60 pitfalls found while building this
 ## Credits
 
 - [LocalSend](https://localsend.org) and its [protocol](https://github.com/localsend/protocol). RetroSend is an independent client, not affiliated with LocalSend.
-- [Python for S60](https://sourceforge.net/projects/pys60/) by Nokia. `RetroSend_with_Python.sis` bundles Nokia's signed Python for S60 1.4.5 runtime unchanged.
+- [Python for S60](https://sourceforge.net/projects/pys60/) by Nokia. The releases include Nokia's signed Python for S60 1.4.5 runtime, unchanged.
 - [Ensymble](https://github.com/essaic/ensymble) by Jussi Ylänen, for building SIS packages.

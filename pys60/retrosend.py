@@ -100,7 +100,7 @@ import struct
 #@INLINE media.py
 from media import read_id3, video_info, human_duration
 
-VERSION = u"1.1.1"  # single source of truth: build_sis.sh reads this
+VERSION = u"1.1.3"  # single source of truth: build_sis.sh reads this
 API = "/api/localsend/v2/"
 MULTICAST = "224.0.0.167"
 DEFAULT_PORT = 53317
@@ -2045,6 +2045,10 @@ class App:
         self.apo = None
         self.listbox = None
         self.picker = None
+        self.verified = {}     # fingerprint -> IP confirmed this session
+        self.loc = None        # the UDP address search in progress
+        self.loc_queue = []    # devices waiting to be located
+        self.loc_wait = 1.5    # seconds to wait for an answer per round
 
     def safe(self, func, *args):
         """Runs a callback; errors are logged instead of breaking the app."""
@@ -2177,7 +2181,12 @@ class App:
 
     def peer(self, dev):
         if not valid_ip(dev["ip"]):
-            return  # address unknown; the network sweep will find it
+            # Someone registered with us, but PyS60 can't tell us their IP
+            # (accept() reports 0.8.0.0). Find it with the UDP search below.
+            self.unlocated(dev)
+            return
+        if dev["fingerprint"]:
+            self.verified[dev["fingerprint"]] = dev["ip"]
         for i in range(len(self.peers)):
             p = self.peers[i]
             if (dev["fingerprint"] and dev["fingerprint"] == p["fingerprint"]) or \
@@ -2400,66 +2409,122 @@ class App:
             Client(self.cfg, self, self.net).register(dev["ip"], dev["port"], self.peer, ignore)
 
     def scan(self):
-        self.log(u"scan (announce + network sweep)")
+        """Re-checks remembered devices and asks everyone on the Wi-Fi to answer;
+        devices that answer with an unknown address are located by unlocated()."""
+        self.log(u"scan")
+        self.verified = {}
+        self.check_saved_devices()
         Client(self.cfg, self, self.net).announce(self.ip)
-        self.sweep()
 
-    def sweep(self):
-        """Asks every address on this Wi-Fi network (x.x.x.1-254) for LocalSend."""
-        if not self.ip:
+    # ---- locating a device whose IP we can't see
+    #
+    # LocalSend answers every "announce" UDP packet by registering with us
+    # over HTTP, and the registration carries its fingerprint. So: announce
+    # to half of the remaining addresses (UDP, no connections, so silent
+    # addresses cost nothing); if that device answers, it is in that half,
+    # otherwise in the other. About 8 rounds find it among 254 addresses;
+    # one HTTP register to the last address then confirms it.
+
+    def unlocated(self, dev):
+        fp = dev["fingerprint"]
+        if not fp or fp == to_u(self.cfg["fingerprint"]):
             return
-        if getattr(self, "sweep_left", 0) and time.time() - self.sweep_started < 60:
-            return  # one is already running
-        self.sweep_gen = getattr(self, "sweep_gen", 0) + 1
-        self.sweep_started = time.time()
-        base = self.ip[:self.ip.rfind(".") + 1]
-        try:
-            mine = int(self.ip[self.ip.rfind(".") + 1:])
-        except:
-            mine = 1
-        # nearest addresses first: routers hand out neighbouring numbers
-        order = []
-        for i in range(1, 255):
-            if i != mine:
-                order.append((abs(i - mine), i))
-        order.sort()
-        self.sweep_queue = []
-        for pair in order:
-            self.sweep_queue.append(base + str(pair[1]))
-        self.sweep_left = len(self.sweep_queue)
-        self.sweep_before = len(self.peers)
-        for k in range(8):
-            self.sweep_next()
-
-    def sweep_next(self):
-        if not self.sweep_queue:
+        if self.loc is not None and self.loc["fp"] == fp:
+            self.loc["hit"] = 1  # it answered during this round
             return
-        host = self.sweep_queue[0]
-        del self.sweep_queue[0]
-        c = Client(self.cfg, self, self.net)
-        c.quiet = 1
-        state = {"open": 1}
-        gen = self.sweep_gen
-
-        def end(*args):
-            if not state["open"] or gen != self.sweep_gen:
+        if self.verified.has_key(fp):
+            return  # already reachable at a confirmed address
+        for d in self.loc_queue:
+            if d["fingerprint"] == fp:
                 return
-            state["open"] = 0
-            self.sweep_left = self.sweep_left - 1
-            if self.sweep_left <= 0:
-                self.sweep_left = 0
-                self.log(u"sweep done, %d device(s) known" % len(self.peers))
-                self.set_title(u"RetroSend")
-            elif self.sweep_left % 20 == 0:
-                self.set_title(u"Scanning... %d left" % self.sweep_left)
-            self.sweep_next()
+        self.loc_queue.append(dev)
+        if self.loc is None:
+            self.locate_next()
 
-        def found(dev, end=end):
+    def locate_next(self):
+        if not self.loc_queue or not self.ip:
+            self.loc = None
+            return
+        dev = self.loc_queue[0]
+        del self.loc_queue[0]
+        if self.verified.has_key(dev["fingerprint"]):
+            self.locate_next()
+            return
+        base = self.ip[:self.ip.rfind(".") + 1]
+        cands = []
+        for i in range(1, 255):
+            if base + str(i) != self.ip:
+                cands.append(base + str(i))
+        self.loc = {"fp": dev["fingerprint"], "alias": dev["alias"], "cands": cands,
+                    "all": cands[:], "round": 0, "hit": 0, "tries": 0, "port": dev["port"]}
+        self.log(u"locating " + dev["alias"])
+        self.locate_round()
+
+    def locate_round(self):
+        L = self.loc
+        if L is None:
+            return
+        c = L["cands"]
+        if len(c) <= 1:
+            self.locate_confirm()
+            return
+        L["round"] = L["round"] + 1
+        L["half"] = c[:len(c) / 2]
+        L["rest"] = c[len(c) / 2:]
+        L["hit"] = 0
+        self.set_title(u"Finding %s... %d" % (L["alias"], L["round"]))
+        msg = json_dumps(make_info(self.cfg, 1, 1))
+        for ip in L["half"]:
+            try:
+                self.net.udp_send(ip, DEFAULT_PORT, msg)
+            except:
+                pass
+        self.net.later(self.loc_wait, self.locate_check)
+
+    def locate_check(self):
+        L = self.loc
+        if L is None:
+            return
+        if L["hit"]:
+            L["cands"] = L["half"]
+        else:
+            L["cands"] = L["rest"]
+        self.locate_round()
+
+    def locate_confirm(self):
+        L = self.loc
+        if not L["cands"]:
+            self.locate_retry()
+            return
+        ip = L["cands"][0]
+
+        def ok(dev, self=self, L=L):
+            if dev["fingerprint"] and dev["fingerprint"] != L["fp"]:
+                self.peer(dev)  # a different device lives there; keep looking
+                self.locate_retry()
+                return
+            self.log(u"located %s at %s" % (L["alias"], to_u(dev["ip"])))
             self.peer(dev)
-            end()
-        # No timeout/cancel: cancelling a pending connect would need close().
-        # Silent addresses simply fail when the phone's connect times out.
-        c.register(host, DEFAULT_PORT, found, end)
+            self.set_title(u"RetroSend")
+            self.loc = None
+            self.locate_next()
+
+        def bad(msg, self=self):
+            self.locate_retry()
+        Client(self.cfg, self, self.net).register(ip, L["port"], ok, bad)
+
+    def locate_retry(self):
+        L = self.loc
+        L["tries"] = L["tries"] + 1
+        if L["tries"] >= 2:
+            self.log(u"could not locate " + L["alias"] + u"; use Enter IP address")
+            self.set_title(u"RetroSend")
+            self.loc = None
+            self.locate_next()
+            return
+        L["cands"] = L["all"][:]
+        L["round"] = 0
+        self.locate_round()
 
     # ---- UI
 
@@ -2754,18 +2819,29 @@ class App:
                 appuifw.note(u"Scanning the Wi-Fi network...", "info")
                 before = len(self.peers)
                 waited = 0
-                while waited < 40 and getattr(self, "sweep_left", 0) and \
+                while waited < 40 and (self.loc is not None or waited < 3) and \
                         len(self.peers) == before:
                     e32.ao_sleep(1)  # replies arrive meanwhile
                     waited = waited + 1
+                if len(self.peers) == before:
+                    appuifw.note(u"No new device found. Is LocalSend open with Encryption "
+                                 u"off? Scan again or enter its IP.", "info")
+                # loop: the Send to list comes back with the same files
             else:
-                self.add_by_ip(lambda dev, self=self, items=items: self.start_send(dev, items))
+                # whatever happens with the IP, come back to this list with the
+                # same files instead of losing the selection
+                self.add_by_ip(lambda dev, self=self, items=items: self.start_send(dev, items),
+                               lambda self=self, items=items: self.choose_target(items))
                 return
 
-    def add_by_ip(self, then=None):
-        t = appuifw.query(u"IP address (as shown in LocalSend)", "text", u"192.168.")
+    def add_by_ip(self, then=None, on_fail=None):
+        last = getattr(self, "last_ip", None) or u"192.168."
+        t = appuifw.query(u"IP address (as shown in LocalSend)", "text", to_u(last))
         if not t:
+            if on_fail is not None:
+                on_fail()
             return
+        self.last_ip = t
         host = to_b(t).strip()
         port = DEFAULT_PORT
         if host.find(":") >= 0:
@@ -2784,10 +2860,12 @@ class App:
             else:
                 appuifw.note(u"Added " + dev["alias"], "conf")
 
-        def bad(msg, self=self, host=host):
+        def bad(msg, self=self, host=host, on_fail=on_fail):
             self.set_title(u"RetroSend")
             appuifw.note(u"Could not reach " + to_u(host) + u". Is LocalSend open with "
                          u"Encryption off, on the same Wi-Fi?\n" + to_u(msg), "error")
+            if on_fail is not None:
+                on_fail()
         Client(self.cfg, self, self.net).register(host, port, ok, bad)
 
     def show_devices(self):
@@ -2829,16 +2907,30 @@ class App:
             self.client = None
             self.finished(msg)
 
-        def bad(msg, self=self, dev=dev):
+        def bad(msg, self=self, dev=dev, items=items):
             self.client = None
             self.log(u"send: " + to_u(msg))
             if msg == u"Cancelled." or msg[-9:] == u"declined." or msg.find(u"PIN") >= 0 \
                or msg.find(u"busy") >= 0:
                 self.finished(msg)
-            else:
-                self.finished(u"Sending failed: " + to_u(msg) + u"\nIs LocalSend open on " +
-                              dev["alias"] + u" with Encryption off?")
+                return
+            self.set_title(u"RetroSend")
+            self.update_menu()
+            # keep the files: offer to retry or pick another device
+            self.net.later(0, lambda self=self, dev=dev, items=items, msg=msg:
+                           self.send_failed(dev, items, msg))
         c.send(dev, items, done, bad)
+
+    def send_failed(self, dev, items, msg):
+        what = appuifw.popup_menu([u"Try again", u"Choose another device", u"Give up"],
+                                  u"Couldn't reach " + dev["alias"])
+        if what == 0:
+            self.start_send(dev, items)
+        elif what == 1:
+            self.choose_target(items)
+        else:
+            self.finished(u"Sending failed: " + to_u(msg) + u"\nIs LocalSend open on " +
+                          dev["alias"] + u" with Encryption off?")
 
     def cancel_send(self):
         if self.client is not None:

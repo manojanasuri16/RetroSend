@@ -36,7 +36,7 @@ The address goes through `TInetAddr::Input()`, which rejects an empty string. Us
 
 `accept()` builds the peer address from the first 4 bytes of a `TSockAddr`, which are the address family, not the IP. You always get `0.8.0.0`. `getpeername()` and `getsockname()` aren't implemented. (`recvfrom()` on UDP formats the address correctly.)
 
-**Consequence:** a server can't learn a client's IP from TCP. RetroSend finds LocalSend devices by sweeping the subnet (connecting to x.x.x.1-254, 8 at a time, nearest addresses first), because then the phone itself chose the address.
+**Consequence:** a server can't learn a client's IP from TCP. A TCP sweep of the subnet doesn't work well either: e32socket opens the socket server with only 16 message slots, and each connect to an empty address holds one until the phone gives up (it can't be cancelled without `close()`, see 2). RetroSend instead uses the fact that LocalSend answers every UDP announce by registering over HTTP, and the registration carries its fingerprint. It announces to half of the remaining addresses (UDP, no connections), checks whether that fingerprint answered, and repeats. About 8 rounds find the device among 254 addresses, then one HTTP register confirms it.
 
 ## 5. The access point: ask once, then reuse
 
