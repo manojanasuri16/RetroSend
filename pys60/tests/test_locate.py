@@ -47,5 +47,38 @@ found = [p["alias"] + " " + p["ip"] for p in app.peers]
 print("found %r in %.1fs, %d UDP packets, %d rounds" % (found, took, sent["n"], (app.loc or {}).get("round", 0)))
 ok = found == [u"Solid Blueberry " + TARGET] and app.loc is None
 print(ok and "PASS locate" or "FAIL locate")
-print(ok and "ALL PASSED" or "FAILED")
-sys.stdout.flush(); os._exit(not ok)
+
+# 2. First send with no earlier contact: Scan alone must find the device
+#    (announce goes to every address, the device answers, then it's located).
+app2 = retrosend.App(); app2.net = NET; app2.ip = "127.0.0.1"; app2.loc_wait = 0.3
+app2.cfg["devices"] = []
+def udp_send2(host, port, data):
+    if host == TARGET:
+        NET.later(0.05, lambda: app2.peer(dict(bogus)))
+NET.udp_send = udp_send2
+start = time.time()
+NET.call(app2.scan)
+while time.time() - start < 20 and not [p for p in app2.peers if p["ip"] == TARGET]:
+    time.sleep(0.2)
+ok2 = [p["ip"] for p in app2.peers] == [TARGET]
+print("scan only: found %r in %.1fs" % ([p["ip"] for p in app2.peers], time.time() - start))
+print(ok2 and "PASS scan finds device without prior contact" or "FAIL scan finds device without prior contact")
+
+# 3. Change Wi-Fi uses the app's own list (the phone's dialog crashes while connected)
+import appuifw, socket as _s
+retrosend.socket.access_points = lambda: [{"iapid": 3, "name": u"Home"}, {"iapid": 7, "name": u"Office"}]
+called = {"select": 0}
+def no_dialog():
+    called["select"] += 1
+    raise RuntimeError("must not be called")
+retrosend.socket.select_access_point = no_dialog
+appuifw.popup_menu = lambda labels, title=u"": 1
+appuifw.query = lambda *a: 0
+appuifw.note = lambda *a: None
+app2.cfg["apid"] = 3
+app2.change_ap()
+ok3 = app2.cfg["apid"] == 7 and called["select"] == 0
+print(ok3 and "PASS change Wi-Fi saves choice without the phone dialog" or "FAIL change Wi-Fi")
+allok = ok and ok2 and ok3
+print(allok and "ALL PASSED" or "FAILED")
+sys.stdout.flush(); os._exit(not allok)

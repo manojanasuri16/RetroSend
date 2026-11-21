@@ -100,7 +100,7 @@ import struct
 #@INLINE media.py
 from media import read_id3, video_info, human_duration
 
-VERSION = u"1.1.3"  # single source of truth: build_sis.sh reads this
+VERSION = u"1.1.4"  # single source of truth: build_sis.sh reads this
 API = "/api/localsend/v2/"
 MULTICAST = "224.0.0.167"
 DEFAULT_PORT = 53317
@@ -2415,6 +2415,29 @@ class App:
         self.verified = {}
         self.check_saved_devices()
         Client(self.cfg, self, self.net).announce(self.ip)
+        # Multicast/broadcast often doesn't reach phones over Wi-Fi, so also
+        # announce directly to every address (UDP, cheap). LocalSend answers
+        # by registering, and unlocated() then finds the sender's address.
+        if self.ip and self.loc is None:
+            base = self.ip[:self.ip.rfind(".") + 1]
+            todo = []
+            for i in range(1, 255):
+                if base + str(i) != self.ip:
+                    todo.append(base + str(i))
+            self.announce_all(todo)
+
+    def announce_all(self, todo):
+        """Sends the announce to 32 addresses at a time so the screen stays responsive."""
+        msg = json_dumps(make_info(self.cfg, 1, 1))
+        chunk = todo[:32]
+        rest = todo[32:]
+        for ip in chunk:
+            try:
+                self.net.udp_send(ip, DEFAULT_PORT, msg)
+            except:
+                pass
+        if rest:
+            self.net.later(0.05, lambda self=self, rest=rest: self.announce_all(rest))
 
     # ---- locating a device whose IP we can't see
     #
@@ -2972,9 +2995,38 @@ class App:
             self.refresh()
 
     def change_ap(self):
-        if self.setup_ap(1):
-            appuifw.note(u"Wi-Fi saved. Restart RetroSend to use it everywhere.", "info")
-        self.refresh()
+        """Picks another Wi-Fi network for the next start. The phone's own
+        access point dialog crashes the app while a connection is in use,
+        so this lists the networks itself and applies the choice on restart."""
+        try:
+            aps = socket.access_points()
+        except:
+            aps = None
+            self.log(u"access_points: " + err_text())
+        if not aps:
+            self.cfg["apid"] = None
+            self.save_cfg()
+            appuifw.note(u"Close and reopen RetroSend: it will ask which Wi-Fi to use.",
+                         "info")
+            return
+        labels = []
+        for a in aps:
+            name = to_u(a.get("name", u"?"))
+            if a.get("iapid") == self.cfg["apid"]:
+                name = name + u" (current)"
+            labels.append(name)
+        i = appuifw.popup_menu(labels, u"Wi-Fi for RetroSend")
+        if i is None:
+            return
+        apid = aps[i].get("iapid")
+        if apid == self.cfg["apid"]:
+            return
+        self.cfg["apid"] = int(apid)
+        self.save_cfg()
+        self.log(u"Wi-Fi changed to " + labels[i] + u" (used from next start)")
+        if appuifw.query(u"Saved. Close RetroSend now? Open it again to use " +
+                         to_u(aps[i].get("name", u"")) + u".", "query"):
+            self.exit()
 
     def help(self):
         appuifw.note(u"RetroSend " + VERSION + u". On the other device: open LocalSend, Settings > turn Encryption OFF. "
