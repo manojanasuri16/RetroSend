@@ -9,6 +9,7 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 | **Phones** | Nokia S60 3rd Edition (FP1/FP2), tested on a Nokia N79 |
 | **Other side** | LocalSend on any platform, with **Encryption turned off** |
 | **Network** | Both devices on the same Wi-Fi |
+| **Install** | Phone memory or memory card (tested on the N79 from the memory card) |
 
 ---
 
@@ -66,7 +67,7 @@ On the phone:
 2. Copy the files to the phone (USB cable in *Mass storage* mode, Bluetooth, or a card reader). Open them in **File manager**.
 3. Install **`PythonForS60_1_4_5_3rdEd.sis`** first. If it says **"Certificate expired"** (Nokia's certificate is old), set the phone's date to **2009**, install, then set the date back.
 4. Install **`RetroSend-<version>-S60v3.sis`**. You'll see **one** "untrusted supplier" warning, because RetroSend is self-signed. Accept it.
-5. The installer asks for **phone memory or memory card**. Since 1.2.1 either works, wherever Python for S60 is installed, on an unlocked phone. Otherwise install RetroSend on the same drive as Python (see [pys60/rscfix/README.md](pys60/rscfix/README.md)).
+5. The installer asks for **phone memory or memory card**. Since 1.2.1 either works, wherever Python for S60 is installed, on an unlocked phone (tested on a Nokia N79 with RetroSend on the memory card and Python in phone memory). On a phone that isn't unlocked, install RetroSend on the same drive as Python (see [pys60/rscfix/README.md](pys60/rscfix/README.md)).
 
 > **If RetroSend (or any Python app) does nothing when you open it,** the Python runtime is missing or damaged. Releases 1.0.0 to 1.1.1 offered a combined "with-Python" package, which could remove Python when it was replaced. Remove RetroSend and Python for S60 in App. mgr., then install Python and RetroSend again as above.
 
@@ -185,6 +186,13 @@ tools/setup.sh          downloads the build tools
 tools/ensymble-retrosend.patch   makes Ensymble work with current OpenSSL on Linux
 docs/PYS60-NOTES.md     PyS60 pitfalls found while building this
 ```
+
+## More apps for the Nokia N79
+
+- **[RetroTorch](https://github.com/manojanasuri16/RetroTorch)**: a torch app: the camera's LED flash as a steady light, plus the screen, keypad and extra lights.
+- **[RetroTele](https://github.com/manojanasuri16/RetroTele)**: a Telegram client that talks to Telegram directly, no PC or proxy needed.
+
+Like this app, both are Python for S60 1.4.5 apps that install to phone memory or the memory card.
 
 ## Credits
 
