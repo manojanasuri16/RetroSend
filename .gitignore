@@ -13,3 +13,6 @@ pys60/cert/
 retrosend_log*.txt
 E:*
 retrosend.cfg
+# native build output
+native/out/
+native/build.log

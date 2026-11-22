@@ -1,6 +1,9 @@
 #!/bin/sh
 # Builds the native S60 3rd Edition app from retrosend.py (+ media.py).
-#   dist/RetroSend.sis              app only (needs Python for S60 1.4.5 installed)
+#   dist/RetroSend.sis              app only (needs Python for S60 1.4.5 installed);
+#                                   installs to phone memory or the memory card,
+#                                   wherever Python is (retrosend_rscfix.exe, see
+#                                   rscfix/README.md)
 #   dist/RetroSend_with_Python.sis  only with MERGE=1 (not recommended, see below)
 # Run ../tools/setup.sh once first to download the tools.
 set -e
@@ -55,11 +58,26 @@ cp retrosend.py build/app/rs_app.py
 for m in $(sed -n 's/^#@INLINE \(.*\.py\)$/\1/p' retrosend.py); do cp "$m" build/app/; done
 for f in build/app/*.py; do python3 tools/check_py22.py "$f" >/dev/null; done
 
-$PY $ENS py2sis --uid=0xE7A3D5C1 --appname=RetroSend --version=$VERSION \
+# Memory card or phone memory: retrosend_rscfix.exe, run once by the installer,
+# puts appuifw's resource file on the app's drive (see rscfix/README.md).
+EXTRAS=""
+if [ -f ../native/out/retrosend_rscfix.exe ]; then
+  mkdir -p build/app/root/sys/bin build/app/root/resource/retrosend
+  cp ../native/out/retrosend_rscfix.exe build/app/root/sys/bin/
+  cp rscfix/appuifwmodule.rsc build/app/root/resource/retrosend/
+  EXTRAS="--extrasdir=root"
+  echo "including retrosend_rscfix.exe (any-drive install)"
+else
+  echo "WARNING: ../native/out/retrosend_rscfix.exe not built (native/build.sh):"
+  echo "         the app will only start on the same drive as Python for S60"
+fi
+
+$PY tools/py2sis_rscfix.py "$(dirname $ENS)" --uid=0xE7A3D5C1 --appname=RetroSend --version=$VERSION \
   --caption=RetroSend --shortcaption=RetroSend --vendor=RetroSend --icon=icon.svg \
   --caps=NetworkServices+LocalServices+ReadUserData+WriteUserData+UserEnvironment \
   --heapsize=4k,8M --cert=cert/retrosend_cert.pem --privkey=cert/retrosend_key.pem \
-  build/app dist/RetroSend.sis </dev/null >build/py2sis.log
+  $EXTRAS build/app dist/RetroSend.sis </dev/null >build/py2sis.log
+grep "rscfix" build/py2sis.log || true
 echo "built dist/RetroSend.sis"
 
 # The combined package is off by default: it registers the Python runtime as

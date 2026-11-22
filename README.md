@@ -66,6 +66,7 @@ On the phone:
 2. Copy the files to the phone (USB cable in *Mass storage* mode, Bluetooth, or a card reader). Open them in **File manager**.
 3. Install **`PythonForS60_1_4_5_3rdEd.sis`** first. If it says **"Certificate expired"** (Nokia's certificate is old), set the phone's date to **2009**, install, then set the date back.
 4. Install **`RetroSend-<version>-S60v3.sis`**. You'll see **one** "untrusted supplier" warning, because RetroSend is self-signed. Accept it.
+5. The installer asks for **phone memory or memory card**. Since 1.2.1 either works, wherever Python for S60 is installed, on an unlocked phone. Otherwise install RetroSend on the same drive as Python (see [pys60/rscfix/README.md](pys60/rscfix/README.md)).
 
 > **If RetroSend (or any Python app) does nothing when you open it,** the Python runtime is missing or damaged. Releases 1.0.0 to 1.1.1 offered a combined "with-Python" package, which could remove Python when it was replaced. Remove RetroSend and Python for S60 in App. mgr., then install Python and RetroSend again as above.
 

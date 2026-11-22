@@ -1,0 +1,16 @@
+// retrosend_rscfix.exe: run by the installer, puts appuifwmodule.rsc on the
+// app's drive so RetroSend starts from phone memory or the memory card
+// (see ..\rscfix\rscfix.cpp)
+TARGET          retrosend_rscfix.exe
+TARGETTYPE      exe
+UID             0 0xE7A3D5C8
+CAPABILITY      NONE
+VENDORID        0
+EPOCSTACKSIZE   0x5000
+
+SOURCEPATH      ..\rscfix
+SOURCE          rscfix.cpp
+
+SYSTEMINCLUDE   \epoc32\include
+
+LIBRARY         euser.lib efsrv.lib
