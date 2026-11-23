@@ -203,6 +203,16 @@ docs/PYS60-NOTES.md     PyS60 pitfalls found while building this
 
 Like this app, both are Python for S60 1.4.5 apps that install to phone memory or the memory card.
 
+## Source code of components
+
+The reusable parts of RetroSend live in their own open-source repos (MIT):
+
+- [localsend-py22](https://github.com/manojanasuri16/localsend-py22): the LocalSend protocol v2 client and server for Python 2.2 / PyS60.
+- [pys60-toolbox](https://github.com/manojanasuri16/pys60-toolbox): the memory-card fix (rscfix), packaging tools and Python 2.2 checkers.
+- [symbian-s60v3-toolchain](https://github.com/manojanasuri16/symbian-s60v3-toolchain): the Linux toolchain used to build native Symbian parts.
+
+The full list is on the [RetroArchive Open source page](https://manojanasuri16.github.io/RetroArchive/opensource/), and RetroSend's own page is on [RetroArchive](https://manojanasuri16.github.io/RetroArchive/apps/retrosend/).
+
 ## Credits
 
 - [LocalSend](https://localsend.org) and its [protocol](https://github.com/localsend/protocol). RetroSend is an independent client, not affiliated with LocalSend.
