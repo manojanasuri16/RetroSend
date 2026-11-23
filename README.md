@@ -208,3 +208,7 @@ Like this app, both are Python for S60 1.4.5 apps that install to phone memory o
 - [LocalSend](https://localsend.org) and its [protocol](https://github.com/localsend/protocol). RetroSend is an independent client, not affiliated with LocalSend.
 - [Python for S60](https://sourceforge.net/projects/pys60/) by Nokia. The releases include Nokia's signed Python for S60 1.4.5 runtime, unchanged.
 - [Ensymble](https://github.com/essaic/ensymble) by Jussi Ylänen, for building SIS packages.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Third-party components (for example Opus, Nokia's VoIP Audio Services, which is not redistributed here) keep their own licences.
