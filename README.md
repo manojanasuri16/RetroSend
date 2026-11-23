@@ -211,4 +211,4 @@ Like this app, both are Python for S60 1.4.5 apps that install to phone memory o
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Third-party components (for example Opus, Nokia's VoIP Audio Services, which is not redistributed here) keep their own licences.
+MIT, see [LICENSE](LICENSE). Third-party components keep their own licences.
