@@ -16,6 +16,7 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 ## Contents
 
 - [Features](#features)
+- [Requirements](#requirements)
 - [Install](#install)
 - [Using RetroSend](#using-retrosend)
 - [Troubleshooting](#troubleshooting)
@@ -49,6 +50,14 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 - **Transfer screen:** a full-screen progress bar with file name, file N of M, size, speed and time left, plus Cancel. It ends with a clear done/failed result.
 - **Easy repeat sends:** the device you sent to last is listed first.
 - **No permission pop-ups:** it's a native app, so it gets its permissions once, at install, and it remembers your Wi-Fi network.
+
+## Requirements
+
+**RetroSend does not need a hacked phone to install or run its features.** Every binary in the package (the Python app and its native helper) is built with only user-grantable capabilities (NetworkServices, LocalServices, ReadUserData, WriteUserData, UserEnvironment; checked in the built files and in `pys60/build_sis.sh`), and the package is self-signed. On a stock S60 3rd Edition phone, set *Software installation* to **All** and *Online certificate check* to **Off** (App. mgr. > Options > Settings) so it accepts the self-signed package. The package's own helper has no capabilities.
+
+**Only the memory-card option uses the hack.** To start from a different drive than Python, the installer runs a small helper that writes into `\resource`, which needs an unlocked phone (Easy Hack Kit: EasyHackKit 2.0, which installs **RomPatcher+**, with **Open4All rp+** ticked and applied before you install; see the [unlock guide](https://github.com/manojanasuri16/symbian-unlock-guide)). Without it you will see **"Update error"** or **"requested application access not granted"** if the phone refuses that step, or the app closes at once when run from a different drive than Python. Fix: install RetroSend on the same drive as Python for S60, with no hack needed.
+
+(Tested on a hacked N79 only; the "stock phone" statement comes from the capability check above, not from a test on a stock phone.)
 
 ## Install
 
