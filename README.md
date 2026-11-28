@@ -6,7 +6,7 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 
 | | |
 |---|---|
-| **Phones** | Nokia S60 3rd Edition (FP1/FP2), tested on a Nokia N79 |
+| **Phones** | Nokia S60 3rd Edition (FP1/FP2), tested on a Nokia N79, and made to work on FP1 phones such as the N82 |
 | **Other side** | LocalSend on any platform, with **Encryption turned off** |
 | **Network** | Both devices on the same Wi-Fi |
 | **Install** | Phone memory or memory card (tested on the N79 from the memory card) |
@@ -16,6 +16,7 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 ## Contents
 
 - [Features](#features)
+- [S60 3rd Edition FP1 phones](#s60-3rd-edition-fp1-phones)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Using RetroSend](#using-retrosend)
@@ -50,6 +51,19 @@ RetroSend speaks the LocalSend v2 protocol, so the other device just runs the no
 - **Transfer screen:** a full-screen progress bar with file name, file N of M, size, speed and time left, plus Cancel. It ends with a clear done/failed result.
 - **Easy repeat sends:** the device you sent to last is listed first.
 - **No permission pop-ups:** it's a native app, so it gets its permissions once, at install, and it remembers your Wi-Fi network.
+
+## S60 3rd Edition FP1 phones
+
+RetroSend runs on S60 3rd Edition FP1 phones (Symbian OS 9.2) as well as FP2:
+that includes the **Nokia N82**, the N95 and the other FP1 models. The Python
+app and the memory-card helper use nothing that FP1 lacks, so the same `.sis`
+installs and runs on both.
+
+The one difference is the **tab bar**: a few FP1 firmwares do not give Python
+apps tabs in the navigation pane. When `set_tabs` is not available, RetroSend
+puts **Send tab** and **Receive tab** at the top of the Options menu and shows
+the current screen in the title, so both screens stay reachable. Everything
+else — sending, receiving, browser sharing, the picker — is unchanged.
 
 ## Requirements
 

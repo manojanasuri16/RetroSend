@@ -100,7 +100,7 @@ import struct
 #@INLINE media.py
 from media import read_id3, video_info, human_duration
 
-VERSION = u"1.2.1"  # single source of truth: build_sis.sh reads this
+VERSION = u"1.2.2"  # single source of truth: build_sis.sh reads this
 API = "/api/localsend/v2/"
 MULTICAST = "224.0.0.167"
 DEFAULT_PORT = 53317
@@ -1522,6 +1522,25 @@ def guess_model():
     return u"Nokia phone"
 
 
+def s60_platform():
+    """The phone's S60 version as text ("S60 3.1 (FP1)"), or u"" when PyS60
+    does not report it."""
+    try:
+        v = e32.s60_version_info
+    except:
+        return u""
+    try:
+        major = int(v[0])
+        minor = int(v[1])
+    except:
+        return to_u(str(v))
+    names = {3: {0: u"S60 3.0", 1: u"S60 3.1 (FP1)", 2: u"S60 3.2 (FP2)"},
+             5: {0: u"S60 5th Edition"}}
+    if names.has_key(major) and names[major].has_key(minor):
+        return names[major][minor]
+    return u"S60 %d.%d" % (major, minor)
+
+
 class App:
     """The user interface. Single-threaded: network events arrive as callbacks."""
     def __init__(self):
@@ -1536,6 +1555,7 @@ class App:
         self.server_error = None
         self.client = None
         self.tab = 0
+        self.tabs = 1          # 0 when the phone gives Python apps no tab bar
         self.apo = None
         self.listbox = None
         self.picker = None
@@ -2255,7 +2275,19 @@ class App:
     def on_tab(self, i):
         boot_log("tab %d" % i)
         self.tab = i
+        if not self.tabs:
+            # no tab bar: the title says which screen is showing
+            if i == 0:
+                appuifw.app.title = u"RetroSend: Send"
+            else:
+                appuifw.app.title = u"RetroSend: Receive"
         self.refresh()
+
+    def show_send_tab(self):
+        self.on_tab(0)
+
+    def show_recv_tab(self):
+        self.on_tab(1)
 
     def on_select(self):
         i = self.listbox.current()
@@ -2603,7 +2635,11 @@ class App:
             self.exit()
 
     def help(self):
-        appuifw.note(u"RetroSend " + VERSION + u". On the other device: open LocalSend, Settings > turn Encryption OFF. "
+        p = s60_platform()
+        if not p:
+            p = guess_model()
+        appuifw.note(u"RetroSend " + VERSION + u" on " + p +
+                     u". On the other device: open LocalSend, Settings > turn Encryption OFF. "
                      u"Same Wi-Fi as this phone. If this phone is not listed there, "
                      u"use Add by IP here with the IP shown in LocalSend.", "info")
 
@@ -2630,14 +2666,26 @@ class App:
         appuifw.app.screen = "normal"
         self.listbox = appuifw.Listbox(self.send_items(), self.on_select)
         appuifw.app.body = self.listbox
-        appuifw.app.set_tabs([u"Send", u"Receive"], self.on_tab)
+        try:
+            appuifw.app.set_tabs([u"Send", u"Receive"], self.on_tab)
+        except:
+            # S60 3rd Edition FP1 phones (N82, N95) do not all give Python apps
+            # a tab bar: keep both screens on the Options menu instead.
+            self.tabs = 0
+            boot_log("no tab bar, Options switches Send/Receive")
+        if not self.tabs:
+            appuifw.app.title = u"RetroSend: Send"
         self.main_menu = [(u"Scan for devices", self.scan),
                             (u"Add device by IP", self.add_by_ip),
                             (u"Device name", self.rename),
                             (u"Change Wi-Fi", self.change_ap),
                             (u"Help", self.help),
                             (u"Exit", self.exit)]
+        if not self.tabs:
+            self.main_menu = [(u"Send tab", self.show_send_tab),
+                              (u"Receive tab", self.show_recv_tab)] + self.main_menu
         self.update_menu()
+        boot_log("platform: " + (s60_platform() or u"unknown") + u" (" + guess_model() + u")")
         appuifw.app.exit_key_handler = self.exit
         boot_log("ui ready")
         self.refresh()
@@ -2648,7 +2696,10 @@ class App:
             self.net.later(2, self.welcome)
         boot_log("waiting for user")
         self.lock.wait()
-        appuifw.app.set_tabs([], None)
+        try:
+            appuifw.app.set_tabs([], None)
+        except:
+            pass
         appuifw.app.menu = []
         appuifw.app.body = None
 
